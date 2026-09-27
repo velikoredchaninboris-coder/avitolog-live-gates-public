@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Run Keycloak OIDC MFA and re-auth drill
-        run: chmod +x avito-live-infra/oidc_mfa_drill.sh && avito-live-infra/oidc_mfa_drill.sh
+        run: chmod +x avito-live-infra/oidc_mfa_drill_v2.sh && avito-live-infra/oidc_mfa_drill_v2.sh
       - name: Upload redacted M21B evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
