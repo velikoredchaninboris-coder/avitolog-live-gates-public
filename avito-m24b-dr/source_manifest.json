@@ -1,0 +1,102 @@
+{
+  "source": "PUBLIC_SYNTHETIC_QA / avito_lot_os",
+  "postgres_version": "17.6",
+  "schema_summary": {
+    "table_count": 18,
+    "policy_count": 18,
+    "custom_trigger_count": 3,
+    "avitolog_function_count": 3
+  },
+  "tables": [
+    [
+      "tenants",
+      2,
+      "53c9718b9411e6ec3afa7588cac9463db86a9a2f58192829bb5907ef381d121f"
+    ],
+    [
+      "projects",
+      1,
+      "dc1f941c1610f9acfb491272af367062cc6d366494fde0ca3df888710dd56c09"
+    ],
+    [
+      "lots",
+      1,
+      "c6ef932595c53db5a2ce47e5962f5606ddb124b80c0d328318954977bfb21e40"
+    ],
+    [
+      "sources",
+      1,
+      "8b9fda86dc9c2e52cc22da7d4543fcc8d1192d8233f056f57b67ee8b6e8b1acb"
+    ],
+    [
+      "source_versions",
+      1,
+      "87c30bbb6cf44c5e40b57da0d78195512e465afd2c9096f5389a03e2bbaed48d"
+    ],
+    [
+      "source_policies",
+      0,
+      "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    ],
+    [
+      "connector_definitions",
+      1,
+      "ef33d3ba319592fd7aeaed4e0fbb8d8092da8f4fe1172610aa63b229d656cf55"
+    ],
+    [
+      "collection_runs",
+      1,
+      "cf9af270f668d6f954151287bbe8d6624a92eebb403f547850eba1afb6b01cd7"
+    ],
+    [
+      "artifacts",
+      1,
+      "55c289d915ba16587e7eaf0e98a29fd490e66d9848c7425b6dfe1c27cbe6da5e"
+    ],
+    [
+      "snapshots",
+      1,
+      "92c7b1363229bfda1cc000c3491a1f581470a3273c120bf502ef648247ffd3ec"
+    ],
+    [
+      "snapshot_artifacts",
+      1,
+      "3a7a5c01faecf22fa63a6cac03e8002b40c562bda8cf82aa4a68636adb877a7c"
+    ],
+    [
+      "observations",
+      1,
+      "7f14568e406da8b6d0b13a492e3b548e694686c70df45b79b7fb7b01fb3c8db8"
+    ],
+    [
+      "claims",
+      1,
+      "2a0f35a6f2e243ffe853f779d6663efc6d2cafb574dc8e37de7ffdb74d8cc098"
+    ],
+    [
+      "evidence_links",
+      1,
+      "10a74b920543fe22aba0227aa428c682357ae36a04ba2b6baa1a5f82dee5d9cd"
+    ],
+    [
+      "lot_source_links",
+      0,
+      "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    ],
+    [
+      "audit_events",
+      1,
+      "c83497b008d0b19b193cc890b4dbfdb2ace5f22dd645c64587641dcca006a19e"
+    ],
+    [
+      "server_state_revisions",
+      0,
+      "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    ],
+    [
+      "schema_migrations",
+      2,
+      "c483ba24a049ebf94cd84ca7bd4b6aa2fe5fad921659c4a3cb3cbb6a0a82cd30"
+    ]
+  ]
+}
