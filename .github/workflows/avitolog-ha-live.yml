@@ -34,6 +34,9 @@ jobs:
             sleep 1
           done
           docker exec pg-primary psql -U postgres -d avito_ha -v ON_ERROR_STOP=1 -c "alter user postgres with replication;"
+          SUBNET=$(docker network inspect avito-ha -f '{{(index .IPAM.Config 0).Subnet}}')
+          docker exec pg-primary bash -lc "echo 'host replication postgres ${SUBNET} scram-sha-256' >> /var/lib/postgresql/data/pg_hba.conf"
+          docker exec pg-primary psql -U postgres -d avito_ha -v ON_ERROR_STOP=1 -c "select pg_reload_conf();"
           docker exec pg-primary psql -U postgres -d avito_ha -v ON_ERROR_STOP=1 -c "create table ha_probe(id bigint primary key, payload text not null); insert into ha_probe values (1,'before-failover');"
 
       - name: Seed physical replica
