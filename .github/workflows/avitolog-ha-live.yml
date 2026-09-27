@@ -73,7 +73,7 @@ jobs:
         run: |
           T0=$(date +%s%3N)
           docker stop pg-primary
-          docker exec pg-replica pg_ctl -D /var/lib/postgresql/data promote
+          docker exec -u postgres pg-replica pg_ctl -D /var/lib/postgresql/data promote
           for i in $(seq 1 30); do
             RECOVERY=$(docker exec pg-replica psql -U postgres -d avito_ha -Atqc "select pg_is_in_recovery();" || true)
             [ "$RECOVERY" = "f" ] && break
