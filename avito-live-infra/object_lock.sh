@@ -2,11 +2,11 @@
 set -euo pipefail
 OUT="avito-live-infra/out/object-lock"
 mkdir -p "$OUT"
-REL="minio"
-BASE="https://dl.min.io/server/minio/release/linux-amd64"
-curl -fsSLo "$REL" "$BASE/minio"
-curl -fsSLo "$REL.sha256sum" "$BASE/minio.sha256sum"
-sha256sum -c "$REL.sha256sum"
+REL="minio.linux-amd64.RELEASE.2025-09-07T16-13-09Z"
+URL="https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/$REL"
+EXPECTED_SHA256="7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f"
+curl -fL --retry 3 --retry-delay 2 -o "$REL" "$URL"
+echo "$EXPECTED_SHA256  $REL" | sha256sum -c -
 chmod +x "$REL"
 DIGEST="$(sha256sum "$REL" | awk '{print $1}')"
 mkdir -p "$OUT/data"
