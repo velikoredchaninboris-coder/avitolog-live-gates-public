@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/avitolog-m21b-keycloak-mfa.yml'
-      - 'avito-live-infra/oidc_mfa_drill.sh'
+      - 'avito-live-infra/oidc_mfa_drill_v2.sh'
   workflow_dispatch:
 
 permissions:
@@ -27,7 +27,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: m21b-keycloak-oidc-mfa
-          path: avito-live-infra/out/oidc-mfa/
+          name: m21b-keycloak-oidc-mfa-v2
+          path: avito-live-infra/out/oidc-mfa-v2/
           if-no-files-found: warn
           retention-days: 7
