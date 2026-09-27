@@ -1,0 +1,139 @@
+name: AVITOLOG M25B Avito Authorized Connector
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  avito-authorized-connector:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AVITO_CLIENT_ID: ${{ secrets.AVITO_CLIENT_ID }}
+      AVITO_CLIENT_SECRET: ${{ secrets.AVITO_CLIENT_SECRET }}
+    steps:
+      - name: Fail closed unless authorized credentials are configured
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$AVITO_CLIENT_ID" || { echo "AVITO_CLIENT_ID secret is not configured"; exit 20; }
+          test -n "$AVITO_CLIENT_SECRET" || { echo "AVITO_CLIENT_SECRET secret is not configured"; exit 21; }
+          echo "::add-mask::$AVITO_CLIENT_ID"
+          echo "::add-mask::$AVITO_CLIENT_SECRET"
+
+      - name: Exchange client credentials without exporting token
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          TOKEN_FILE="$(mktemp)"
+          CODE="$(curl -sS -o "$TOKEN_FILE" -w '%{http_code}' \
+            --connect-timeout 15 --max-time 45 \
+            -X POST 'https://api.avito.ru/token' \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            --data-urlencode 'grant_type=client_credentials' \
+            --data-urlencode "client_id=$AVITO_CLIENT_ID" \
+            --data-urlencode "client_secret=$AVITO_CLIENT_SECRET")"
+          export TOKEN_FILE TOKEN_HTTP_CODE="$CODE"
+          python3 - <<'PY'
+          import json, os, pathlib, sys
+          p=pathlib.Path(os.environ["TOKEN_FILE"])
+          try: data=json.loads(p.read_text())
+          except Exception: data={}
+          code=int(os.environ["TOKEN_HTTP_CODE"])
+          token=data.get("access_token")
+          if code != 200 or not isinstance(token,str) or not token:
+              print(f"Token exchange failed with HTTP {code}", file=sys.stderr)
+              raise SystemExit(22)
+          pathlib.Path("/tmp/avito_access_token").write_text(token)
+          pathlib.Path("/tmp/avito_token_meta.json").write_text(json.dumps({
+              "auth_http_code":code,
+              "token_type":str(data.get("token_type","")),
+              "expires_in":int(data.get("expires_in",0) or 0)
+          }))
+          PY
+          TOKEN="$(cat /tmp/avito_access_token)"
+          echo "::add-mask::$TOKEN"
+          rm -f "$TOKEN_FILE"
+
+      - name: Verify authorized account with redacted evidence only
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          TOKEN="$(cat /tmp/avito_access_token)"
+          ACCOUNT_FILE="$(mktemp)"
+          CODE="$(curl -sS -o "$ACCOUNT_FILE" -w '%{http_code}' \
+            --connect-timeout 15 --max-time 45 \
+            'https://api.avito.ru/core/v1/accounts/self' \
+            -H "Authorization: Bearer $TOKEN" \
+            -H 'Accept: application/json')"
+          export ACCOUNT_FILE ACCOUNT_HTTP_CODE="$CODE"
+          mkdir -p evidence
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, sys
+          def h(v):
+              return None if v is None else hashlib.sha256(str(v).encode()).hexdigest()
+          meta=json.loads(pathlib.Path("/tmp/avito_token_meta.json").read_text())
+          try: account=json.loads(pathlib.Path(os.environ["ACCOUNT_FILE"]).read_text())
+          except Exception: account={}
+          code=int(os.environ["ACCOUNT_HTTP_CODE"])
+          if code != 200 or not isinstance(account,dict):
+              print(f"accounts/self failed with HTTP {code}", file=sys.stderr)
+              raise SystemExit(23)
+          report={
+              "gate":"M25B_AVITO_AUTHORIZED_CONNECTOR",
+              "auth_flow":"client_credentials",
+              "auth_http_code":meta["auth_http_code"],
+              "token_type":meta["token_type"],
+              "expires_in":meta["expires_in"],
+              "account_self_http_code":code,
+              "authorized":True,
+              "account_id_hash":h(account.get("id") or account.get("user_id")),
+              "email_hash":h(account.get("email")),
+              "name_hash":h(account.get("name")),
+              "raw_account_exported":False,
+              "access_token_exported":False,
+              "client_secret_exported":False,
+              "source_manager_approval":False,
+              "source_admission_complete":False,
+              "status":"AUTH_CONNECTIVITY_PASS_APPROVAL_PENDING"
+          }
+          pathlib.Path("evidence/m25b_avito_connector_report.json").write_text(
+              json.dumps(report,ensure_ascii=False,indent=2)+"\n")
+          print(json.dumps({
+              "gate":report["gate"],"authorized":True,
+              "account_self_http_code":code,
+              "source_manager_approval":False,
+              "source_admission_complete":False,
+              "status":report["status"]
+          },ensure_ascii=False))
+          PY
+          rm -f "$ACCOUNT_FILE" /tmp/avito_access_token /tmp/avito_token_meta.json
+
+      - name: Redaction and admission-boundary gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f evidence/m25b_avito_connector_report.json
+          ! grep -R -F "$AVITO_CLIENT_ID" evidence
+          ! grep -R -F "$AVITO_CLIENT_SECRET" evidence
+          python3 - <<'PY'
+          import json
+          r=json.load(open("evidence/m25b_avito_connector_report.json"))
+          assert r["authorized"] is True
+          assert r["auth_http_code"] == 200
+          assert r["account_self_http_code"] == 200
+          assert r["access_token_exported"] is False
+          assert r["client_secret_exported"] is False
+          assert r["source_manager_approval"] is False
+          assert r["source_admission_complete"] is False
+          PY
+
+      - name: Upload redacted M25B evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: m25b-avito-authorized-connector
+          path: evidence/m25b_avito_connector_report.json
+          if-no-files-found: ignore
+          retention-days: 7
