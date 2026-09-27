@@ -1,5 +1,10 @@
 name: AVITOLOG Free Infra Live Gates
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/avitolog-free-infra-gates.yml'
+      - 'avito-live-infra/**'
   workflow_dispatch:
 permissions:
   contents: read
