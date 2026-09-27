@@ -139,8 +139,10 @@ public class TotpGen {
   }
 }
 JAVA
-javac -cp "/tmp/keycloak/lib/lib/*" /tmp/TotpGen.java
-totp_now(){ java -cp "/tmp:/tmp/keycloak/lib/lib/*" TotpGen "$1"; }
+KC_CP="$(find /tmp/keycloak/lib -type f -name '*.jar' -print | paste -sd: -)"
+test -n "$KC_CP"
+javac -cp "$KC_CP" /tmp/TotpGen.java
+totp_now(){ java -cp "/tmp:$KC_CP" TotpGen "$1"; }
 
 phase "password-only-negative:start"
 CODE_NO_OTP="$(curl -sS -o /tmp/no-otp.json -w '%{http_code}' -X POST "$TOKEN_URL"   -H 'Content-Type: application/x-www-form-urlencoded'   --data-urlencode 'client_id=avitolog-ci'   --data-urlencode 'grant_type=password'   --data-urlencode 'username=mfa-user'   --data-urlencode "password=$USER_PASS"   --data-urlencode 'scope=openid')"
