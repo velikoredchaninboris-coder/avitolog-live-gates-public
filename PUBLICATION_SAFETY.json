@@ -1,0 +1,14 @@
+{
+  "classification": "PUBLIC_SYNTHETIC_TEST_HARNESS",
+  "contains_real_user_data": false,
+  "contains_secrets": false,
+  "contains_frontend_product_code": false,
+  "contains_supabase_project_url": false,
+  "contains_publishable_or_service_keys": false,
+  "expected_m52b_hashes": {
+    "001_core.up.sql": "37aa20760433b0e652b7d98f3ac6f151c01d0ba88abe0cf6c5569806546281fb",
+    "002_immutability_guards.up.sql": "b35abfbdb52164f66713bf361066d2a2863a97872d646d1cf687e1215232c525",
+    "run.sh": "5fa2034404830bd26abb8e0ea54ca1bf792810e41204ad7037076ce304248cfd"
+  },
+  "github_public_standard_runner_fact": "verified_from_official_docs_2026-09-27"
+}
