@@ -23,7 +23,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Run Keycloak OIDC MFA and re-auth drill
         run: |
-          sed 's|^OUT="avito-live-infra/out/oidc-mfa-v2"$|OUT="$GITHUB_WORKSPACE/avito-live-infra/out/oidc-mfa-v2"|' avito-live-infra/oidc_mfa_drill_v2.sh > /tmp/oidc_mfa_drill_v2.sh
+          sed -e 's|^OUT="avito-live-infra/out/oidc-mfa-v2"$|OUT="$GITHUB_WORKSPACE/avito-live-infra/out/oidc-mfa-v2"|' \
+              -e 's|"$GITHUB_WORKSPACE/$OUT/|"$OUT/|g' \
+              avito-live-infra/oidc_mfa_drill_v2.sh > /tmp/oidc_mfa_drill_v2.sh
           chmod +x /tmp/oidc_mfa_drill_v2.sh
           /tmp/oidc_mfa_drill_v2.sh
       - name: Upload redacted M21B evidence
