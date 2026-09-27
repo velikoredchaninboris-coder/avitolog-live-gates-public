@@ -74,16 +74,27 @@ export KC_BOOTSTRAP_ADMIN_PASSWORD=AVITOLOG_CI_SYNTHETIC_ADMIN_2026
 cd /tmp/keycloak
 nohup bin/kc.sh start-dev --http-port=8080 --import-realm > /tmp/keycloak.log 2>&1 &
 KC_PID=$!
-cleanup(){ kill "$KC_PID" >/dev/null 2>&1 || true; wait "$KC_PID" >/dev/null 2>&1 || true; }
+cleanup(){
+  cp /tmp/keycloak.log "$OUT/keycloak.log" >/dev/null 2>&1 || true
+  kill "$KC_PID" >/dev/null 2>&1 || true
+  wait "$KC_PID" >/dev/null 2>&1 || true
+}
 trap cleanup EXIT
 cd "$GITHUB_WORKSPACE"
 
 DISCOVERY_URL="http://127.0.0.1:8080/realms/avitolog/.well-known/openid-configuration"
 for i in $(seq 1 120); do
   if curl -fsS "$DISCOVERY_URL" >/tmp/discovery.json; then break; fi
+  if ! kill -0 "$KC_PID" >/dev/null 2>&1; then
+    cp /tmp/keycloak.log "$OUT/keycloak.log" || true
+    tail -200 /tmp/keycloak.log
+    echo "Keycloak exited before readiness" >&2
+    exit 1
+  fi
   sleep 1
 done
 if ! test -s /tmp/discovery.json; then
+  cp /tmp/keycloak.log "$OUT/keycloak.log" || true
   tail -200 /tmp/keycloak.log
   exit 1
 fi
