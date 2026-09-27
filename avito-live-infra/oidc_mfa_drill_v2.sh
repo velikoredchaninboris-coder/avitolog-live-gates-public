@@ -29,11 +29,7 @@ phase "download:ok"
 # All credentials are generated inside this ephemeral runner only.
 ADMIN_PASS="$(openssl rand -hex 24)"
 USER_PASS="$(openssl rand -hex 24)"
-OTP_SECRET="$(python3 - <<'PY'
-import base64,os
-print(base64.b32encode(os.urandom(20)).decode().rstrip('='))
-PY
-)"
+OTP_SECRET="$(openssl rand -hex 20)"
 export ADMIN_PASS USER_PASS OTP_SECRET
 
 phase "realm-json:start"
@@ -136,10 +132,8 @@ JWKS_URI="$(jq -r .jwks_uri /tmp/discovery.json)"
 curl -fsS "$JWKS_URI" >/tmp/jwks.json
 
 cat >/tmp/totp.py <<'PY'
-import base64,hmac,hashlib,struct,time,sys
-s=sys.argv[1]
-s += '='*((8-len(s)%8)%8)
-key=base64.b32decode(s,casefold=True)
+import hmac,hashlib,struct,time,sys
+key=sys.argv[1].encode('utf-8')
 counter=int(time.time())//30
 msg=struct.pack('>Q',counter)
 h=hmac.new(key,msg,hashlib.sha1).digest()
