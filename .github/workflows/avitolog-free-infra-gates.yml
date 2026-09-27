@@ -1,0 +1,50 @@
+name: AVITOLOG Free Infra Live Gates
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: avitolog-free-infra-live-gates
+  cancel-in-progress: false
+jobs:
+  object-lock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Capture input hashes
+        run: mkdir -p avito-live-infra/out/meta && sha256sum avito-live-infra/*.sh > avito-live-infra/out/meta/input_sha256.txt
+      - name: Run MinIO Object Lock drill
+        run: chmod +x avito-live-infra/object_lock.sh && avito-live-infra/object_lock.sh
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: m77-object-lock
+          path: avito-live-infra/out/object-lock/
+          retention-days: 7
+  vault:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Run Vault auth lease rotate revoke drill
+        run: chmod +x avito-live-infra/vault_drill.sh && avito-live-infra/vault_drill.sh
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: m77-vault
+          path: avito-live-infra/out/vault/
+          retention-days: 7
+  process-ha:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Run PostgreSQL streaming replication failover drill
+        run: chmod +x avito-live-infra/ha_drill.sh && avito-live-infra/ha_drill.sh
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: m77-process-ha
+          path: avito-live-infra/out/ha/
+          retention-days: 7
