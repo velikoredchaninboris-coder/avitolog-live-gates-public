@@ -1,4 +1,4 @@
-f5b4be810abe020e5e1e184302afb9e96ea5aae7392e91512011a0d519120548  .github/workflows/avitolog-free-live-gates.yml
+04f720b4ed5f8e33d8d92670fa0caadf1a864171bcd048c3af9cb8573a58a77c  .github/workflows/avitolog-free-live-gates.yml
 355f93de23c8ce523e11c233d83ba80123c29b560317286d43b65f46a6c5884a  PUBLICATION_SAFETY.json
 6ea6ec2edaec594343e445c71e1b92b33c192b251549f4b328a888e583afe1ca  README.md
 bccbe4553633ef40f2bd2d4969e0faaea1832c01ab949fe7e2a3ae060ec4fff9  avito-m24b-dr/003_live_hardening.sql
