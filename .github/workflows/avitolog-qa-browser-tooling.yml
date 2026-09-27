@@ -1,0 +1,31 @@
+name: AVITOLOG QA Browser Tooling
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/avitolog-qa-browser-tooling.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package-headless-shell:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download official Chrome for Testing headless shell
+        run: |
+          set -euo pipefail
+          VERSION=151.0.7922.77
+          URL="https://storage.googleapis.com/chrome-for-testing-public/${VERSION}/linux64/chrome-headless-shell-linux64.zip"
+          curl --fail --location --retry 3 "$URL" -o chrome-headless-shell-linux64.zip
+          sha256sum chrome-headless-shell-linux64.zip | tee chrome-headless-shell-linux64.zip.sha256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: avitolog-qa-headless-shell
+          path: |
+            chrome-headless-shell-linux64.zip
+            chrome-headless-shell-linux64.zip.sha256
+          retention-days: 1
