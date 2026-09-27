@@ -60,17 +60,24 @@ realm={
  }],
  "users":[{
    "username":"mfa-user",
+   "email":"mfa-user@avitolog.invalid",
+   "firstName":"AVITOLOG",
+   "lastName":"MFA",
    "enabled":True,
    "emailVerified":True,
    "totp":True,
-   "credentials":[{
-     "type":"otp",
-     "userLabel":"AVITOLOG CI TOTP",
-     "secretData":json.dumps({"value":otp},separators=(",",":")),
-     "credentialData":json.dumps({
-       "digits":6,"counter":0,"period":30,"algorithm":"HmacSHA1","subType":"totp"
-     },separators=(",",":"))
-   }]
+   "requiredActions":[],
+   "credentials":[
+     {"type":"password","value":os.environ["USER_PASS"],"temporary":False},
+     {
+       "type":"otp",
+       "userLabel":"AVITOLOG CI TOTP",
+       "secretData":json.dumps({"value":otp},separators=(",",":")),
+       "credentialData":json.dumps({
+         "digits":6,"counter":0,"period":30,"algorithm":"HmacSHA1","subType":"totp"
+       },separators=(",",":"))
+     }
+   ]
  }]
 }
 with open("/tmp/keycloak/data/import/avitolog-realm.json","w") as f:
@@ -117,7 +124,6 @@ USER_ID="$(bin/kcadm.sh get users -r avitolog -q username=mfa-user | jq -r '.[0]
 test -n "$USER_ID" && test "$USER_ID" != "null"
 phase "user-lookup:ok"
 
-bin/kcadm.sh set-password -r avitolog   --userid "$USER_ID"   --new-password "$USER_PASS"
 bin/kcadm.sh update "users/$USER_ID" -r avitolog -s enabled=true -s emailVerified=true -s totp=true -s 'requiredActions=[]' >/dev/null
 bin/kcadm.sh get "users/$USER_ID" -r avitolog | jq '{enabled,emailVerified,totp,requiredActions}' > "$GITHUB_WORKSPACE/$OUT/user-state.json"
 test "$(jq -r '.enabled' "$GITHUB_WORKSPACE/$OUT/user-state.json")" = "true"
