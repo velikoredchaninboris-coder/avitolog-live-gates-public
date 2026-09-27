@@ -14,12 +14,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Prepare TLS and Vault config
         run: |
           set -euo pipefail
           mkdir -p vault/{certs,config,data} evidence
-          openssl req -x509 -newkey rsa:2048 -nodes -days 1             -keyout vault/certs/server.key -out vault/certs/ca.crt             -subj "/CN=AVITOLOG Vault CI CA"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1             -keyout vault/certs/ca.key -out vault/certs/ca.crt             -subj "/CN=AVITOLOG Vault CI CA"
           cat > vault/certs/openssl.cnf <<'EOF'
           [req]
           distinguished_name=req_distinguished_name
@@ -34,7 +34,7 @@ jobs:
           IP.1=127.0.0.1
           EOF
           openssl req -new -newkey rsa:2048 -nodes             -keyout vault/certs/server.key -out vault/certs/server.csr             -config vault/certs/openssl.cnf
-          openssl x509 -req -in vault/certs/server.csr             -CA vault/certs/ca.crt -CAkey vault/certs/server.key -CAcreateserial             -out vault/certs/server.crt -days 1             -extensions v3_req -extfile vault/certs/openssl.cnf
+          openssl x509 -req -in vault/certs/server.csr             -CA vault/certs/ca.crt -CAkey vault/certs/ca.key -CAcreateserial             -out vault/certs/server.crt -days 1             -extensions v3_req -extfile vault/certs/openssl.cnf
           cat > vault/config/vault.hcl <<'EOF'
           storage "raft" {
             path    = "/vault/data"
@@ -161,7 +161,7 @@ jobs:
           rm -f /tmp/vault-init.json /tmp/login1.json /tmp/login2.json /tmp/read1.json /tmp/read2.json /tmp/read3.json /tmp/renew.json
       - name: Upload redacted Vault evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: m57b-vault-live-evidence
           path: evidence/vault_report.json
