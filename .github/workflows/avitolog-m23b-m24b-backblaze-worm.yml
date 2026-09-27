@@ -1,0 +1,161 @@
+name: AVITOLOG M23B-M24B Backblaze Persistent WORM
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 3 1 * *'
+permissions:
+  contents: read
+jobs:
+  persistent-worm-restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.B2_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+      B2_S3_ENDPOINT: ${{ secrets.B2_S3_ENDPOINT }}
+      B2_WORM_BUCKET: ${{ secrets.B2_WORM_BUCKET }}
+      EVENT_NAME: ${{ github.event_name }}
+      AWS_DEFAULT_REGION: us-east-1
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: avito_b2_restore
+    services:
+      postgres:
+        image: postgres@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: avito_b2_restore
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d avito_b2_restore"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Fail closed unless dedicated B2 WORM credentials exist
+        run: |
+          set -euo pipefail
+          test -n "$AWS_ACCESS_KEY_ID" || { echo "B2_KEY_ID missing"; exit 20; }
+          test -n "$AWS_SECRET_ACCESS_KEY" || { echo "B2_APPLICATION_KEY missing"; exit 21; }
+          test -n "$B2_S3_ENDPOINT" || { echo "B2_S3_ENDPOINT missing"; exit 22; }
+          test -n "$B2_WORM_BUCKET" || { echo "B2_WORM_BUCKET missing"; exit 23; }
+          case "$B2_S3_ENDPOINT" in https://*) ;; *) echo "B2 endpoint must use HTTPS"; exit 24;; esac
+          echo "::add-mask::$AWS_ACCESS_KEY_ID"
+          echo "::add-mask::$AWS_SECRET_ACCESS_KEY"
+          echo "::add-mask::$B2_WORM_BUCKET"
+      - name: Verify immutable canonical inputs
+        run: |
+          set -euo pipefail
+          echo '37aa20760433b0e652b7d98f3ac6f151c01d0ba88abe0cf6c5569806546281fb  avito-m52b-canonical/001_core.up.sql' | sha256sum -c -
+          echo 'b35abfbdb52164f66713bf361066d2a2863a97872d646d1cf687e1215232c525  avito-m52b-canonical/002_immutability_guards.up.sql' | sha256sum -c -
+          echo 'bccbe4553633ef40f2bd2d4969e0faaea1832c01ab949fe7e2a3ae060ec4fff9  avito-m24b-dr/003_live_hardening.sql' | sha256sum -c -
+          echo '8bf4566cb8271d175dc006f8693993ecc485222b777fb7f0bba88df534265674  avito-m24b-dr/source_data.json' | sha256sum -c -
+          echo 'e4adec57c3342e2d6d3f32eb1da7e29b69d23e626d3ca420f7e341f576d42836  avito-m24b-dr/source_manifest.json' | sha256sum -c -
+      - name: Build deterministic synthetic backup
+        run: |
+          set -euo pipefail
+          mkdir -p object_payload/avito-m24b-dr object_payload/avito-m52b-canonical evidence
+          cp avito-m24b-dr/source_data.json object_payload/avito-m24b-dr/
+          cp avito-m24b-dr/source_manifest.json object_payload/avito-m24b-dr/
+          cp avito-m24b-dr/003_live_hardening.sql object_payload/avito-m24b-dr/
+          cp avito-m24b-dr/restore_and_verify_v2.py object_payload/avito-m24b-dr/
+          cp avito-m52b-canonical/001_core.up.sql object_payload/avito-m52b-canonical/
+          cp avito-m52b-canonical/002_immutability_guards.up.sql object_payload/avito-m52b-canonical/
+          tar --sort=name --mtime='UTC 2026-09-27' --owner=0 --group=0 --numeric-owner -czf m24b-backup-object.tar.gz -C object_payload .
+          sha256sum m24b-backup-object.tar.gz | tee evidence/source_object.sha256
+      - name: Verify persistent B2 WORM target and upload immutable version
+        run: |
+          set -euo pipefail
+          EP="$B2_S3_ENDPOINT"
+          LOCK="$(aws --endpoint-url "$EP" s3api get-object-lock-configuration --bucket "$B2_WORM_BUCKET")"
+          test "$(jq -r '.ObjectLockConfiguration.ObjectLockEnabled' <<<"$LOCK")" = "Enabled"
+          printf '%s\n' "$LOCK" > evidence/bucket_object_lock.json
+          KEY="avitolog/m24b/$(date -u +%Y/%m)/backup-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.tar.gz"
+          RETAIN_UNTIL="$(date -u -d '+2 days' '+%Y-%m-%dT%H:%M:%SZ')"
+          PUT="$(aws --endpoint-url "$EP" s3api put-object --bucket "$B2_WORM_BUCKET" --key "$KEY" --body m24b-backup-object.tar.gz --server-side-encryption AES256 --object-lock-mode COMPLIANCE --object-lock-retain-until-date "$RETAIN_UNTIL" --object-lock-legal-hold-status ON)"
+          VID="$(jq -r '.VersionId' <<<"$PUT")"
+          test -n "$VID" && test "$VID" != "null"
+          RET="$(aws --endpoint-url "$EP" s3api get-object-retention --bucket "$B2_WORM_BUCKET" --key "$KEY" --version-id "$VID")"
+          HOLD="$(aws --endpoint-url "$EP" s3api get-object-legal-hold --bucket "$B2_WORM_BUCKET" --key "$KEY" --version-id "$VID")"
+          HEAD="$(aws --endpoint-url "$EP" s3api head-object --bucket "$B2_WORM_BUCKET" --key "$KEY" --version-id "$VID")"
+          test "$(jq -r '.Retention.Mode' <<<"$RET")" = "COMPLIANCE"
+          test "$(jq -r '.LegalHold.Status' <<<"$HOLD")" = "ON"
+          test "$(jq -r '.ServerSideEncryption // empty' <<<"$HEAD")" = "AES256"
+          set +e
+          aws --endpoint-url "$EP" s3api delete-object --bucket "$B2_WORM_BUCKET" --key "$KEY" --version-id "$VID" >evidence/delete.stdout 2>evidence/delete.stderr
+          DEL_RC=$?
+          set -e
+          test "$DEL_RC" -ne 0
+          ANON_CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$EP/$B2_WORM_BUCKET/$KEY" || true)"
+          test "$ANON_CODE" != "200"
+          aws --endpoint-url "$EP" s3api get-object --bucket "$B2_WORM_BUCKET" --key "$KEY" --version-id "$VID" locked-readback.tar.gz >/dev/null
+          sha256sum locked-readback.tar.gz | tee evidence/readback_object.sha256
+          test "$(cut -d' ' -f1 evidence/source_object.sha256)" = "$(cut -d' ' -f1 evidence/readback_object.sha256)"
+          printf '%s\n' "$RET" > evidence/object_retention.json
+          printf '%s\n' "$HOLD" > evidence/object_legal_hold.json
+          printf '%s\n' "$HEAD" > evidence/object_head.json
+          printf '%s\n' "$ANON_CODE" > evidence/anonymous_http_code.txt
+      - name: Restore only from persistent locked B2 readback
+        run: |
+          set -euo pipefail
+          mkdir restored
+          tar -xzf locked-readback.tar.gz -C restored
+          cd restored
+          python3 avito-m24b-dr/restore_and_verify_v2.py
+          cp avito-m24b-dr/out/restore_report.json "$GITHUB_WORKSPACE/evidence/restore_report.json"
+      - name: Build redacted persistent-target evidence
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib
+          rr=json.load(open("evidence/restore_report.json"))
+          report={
+            "gate":"M23B_M24B_BACKBLAZE_PERSISTENT_WORM",
+            "provider":"Backblaze B2",
+            "s3_compatible":True,
+            "transport_tls":os.environ["B2_S3_ENDPOINT"].startswith("https://"),
+            "bucket_object_lock_enabled":True,
+            "retention_mode":"COMPLIANCE",
+            "legal_hold":"ON",
+            "server_side_encryption":"AES256",
+            "anonymous_object_read_denied":pathlib.Path("evidence/anonymous_http_code.txt").read_text().strip()!="200",
+            "version_specific_delete_blocked":True,
+            "locked_readback_sha_match":True,
+            "restore_tables_exact":len(rr.get("tables",{}))==18 and all(v.get("match") for v in rr["tables"].values()),
+            "restore_guards_pass":all(rr.get("guards",{}).values()),
+            "persistent_external_worm_target":True,
+            "credential_material_exported":False,
+            "real_user_data_used":False,
+            "event_name":os.environ["EVENT_NAME"],
+            "actual_monthly_scheduled_run":os.environ["EVENT_NAME"]=="schedule",
+            "production_ready":False
+          }
+          report["status"]="PASS" if all([
+            report["transport_tls"],report["bucket_object_lock_enabled"],report["retention_mode"]=="COMPLIANCE",
+            report["legal_hold"]=="ON",report["server_side_encryption"]=="AES256",
+            report["anonymous_object_read_denied"],report["version_specific_delete_blocked"],
+            report["locked_readback_sha_match"],report["restore_tables_exact"],report["restore_guards_pass"],
+            report["persistent_external_worm_target"]
+          ]) else "FAIL"
+          pathlib.Path("evidence/backblaze_worm_report.json").write_text(json.dumps(report,indent=2)+"\n")
+          print(json.dumps(report,indent=2))
+          if report["status"]!="PASS": raise SystemExit(31)
+          PY
+      - name: Upload redacted B2 WORM evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: m23b-m24b-backblaze-persistent-worm
+          path: |
+            evidence/backblaze_worm_report.json
+            evidence/source_object.sha256
+            evidence/readback_object.sha256
+            evidence/bucket_object_lock.json
+            evidence/object_retention.json
+            evidence/object_legal_hold.json
+            evidence/object_head.json
+            evidence/anonymous_http_code.txt
+            evidence/delete.stderr
+            evidence/restore_report.json
+          retention-days: 30
