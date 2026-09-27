@@ -1,0 +1,138 @@
+name: AVITOLOG M23B MinIO Object Lock Live
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/avitolog-m23b-object-lock.yml'
+      - 'avito-m23b-object-lock/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  object-lock-live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Start isolated MinIO Object Lock runtime
+        env:
+          MINIO_ROOT_USER: m23btest
+          MINIO_ROOT_PASSWORD: m23b-test-password-not-a-secret-123
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/m23b-data
+          docker pull quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+          docker run -d --name m23b-minio \
+            -p 9000:9000 -p 9001:9001 \
+            -e MINIO_ROOT_USER="$MINIO_ROOT_USER" \
+            -e MINIO_ROOT_PASSWORD="$MINIO_ROOT_PASSWORD" \
+            -v /tmp/m23b-data:/data \
+            quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z \
+            server /data --console-address ":9001"
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          docker logs m23b-minio
+          exit 1
+
+      - name: Run live versioning COMPLIANCE legal-hold negative drill
+        env:
+          MC_HOST_m23b: http://m23btest:m23b-test-password-not-a-secret-123@127.0.0.1:9000
+        run: |
+          set -euo pipefail
+          mkdir -p avito-m23b-object-lock/out
+          docker pull quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z
+          mc(){ docker run --rm --network host -e MC_HOST_m23b="$MC_HOST_m23b" quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z "$@"; }
+
+          mc mb --with-lock m23b/avitolog-evidence
+          mc version info m23b/avitolog-evidence | tee avito-m23b-object-lock/out/versioning.txt
+          mc retention set --default COMPLIANCE 1d m23b/avitolog-evidence
+          mc retention info --default m23b/avitolog-evidence | tee avito-m23b-object-lock/out/default-retention.txt
+
+          printf 'immutable-evidence-v1\n' >/tmp/evidence.txt
+          mc cp /tmp/evidence.txt m23b/avitolog-evidence/evidence.txt
+          mc stat --json m23b/avitolog-evidence/evidence.txt > avito-m23b-object-lock/out/evidence-stat.json
+          VERSION_ID=$(python3 - <<'PY'
+import json
+print(json.load(open('avito-m23b-object-lock/out/evidence-stat.json'))['versionID'])
+PY
+)
+          test -n "$VERSION_ID"
+
+          set +e
+          mc rm --version-id "$VERSION_ID" m23b/avitolog-evidence/evidence.txt >avito-m23b-object-lock/out/compliance-delete.stdout 2>avito-m23b-object-lock/out/compliance-delete.stderr
+          COMPLIANCE_RC=$?
+          set -e
+          test "$COMPLIANCE_RC" -ne 0
+
+          # Separate legal-hold drill: remove default retention, upload a fresh version,
+          # then protect it only with legal hold and verify version-specific delete denial.
+          mc retention clear --default m23b/avitolog-evidence
+          printf 'legal-hold-evidence\n' >/tmp/hold.txt
+          mc cp /tmp/hold.txt m23b/avitolog-evidence/hold.txt
+          mc legalhold set m23b/avitolog-evidence/hold.txt
+          mc legalhold info m23b/avitolog-evidence/hold.txt | tee avito-m23b-object-lock/out/legalhold.txt
+          mc stat --json m23b/avitolog-evidence/hold.txt > avito-m23b-object-lock/out/hold-stat.json
+          HOLD_VERSION=$(python3 - <<'PY'
+import json
+print(json.load(open('avito-m23b-object-lock/out/hold-stat.json'))['versionID'])
+PY
+)
+          set +e
+          mc rm --version-id "$HOLD_VERSION" m23b/avitolog-evidence/hold.txt >avito-m23b-object-lock/out/legalhold-delete.stdout 2>avito-m23b-object-lock/out/legalhold-delete.stderr
+          HOLD_RC=$?
+          set -e
+          test "$HOLD_RC" -ne 0
+
+          # Restore production-policy default before final evidence capture.
+          mc retention set --default COMPLIANCE 1d m23b/avitolog-evidence
+          mc retention info --default m23b/avitolog-evidence > avito-m23b-object-lock/out/default-retention-final.txt
+
+          MINIO_DIGEST=$(docker image inspect quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z --format '{{index .RepoDigests 0}}')
+          MC_DIGEST=$(docker image inspect quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z --format '{{index .RepoDigests 0}}')
+          python3 - <<PY
+import json, pathlib
+out=pathlib.Path('avito-m23b-object-lock/out')
+version=(out/'versioning.txt').read_text(errors='replace')
+ret=(out/'default-retention-final.txt').read_text(errors='replace')
+hold=(out/'legalhold.txt').read_text(errors='replace')
+report={
+  'gate':'M23B_LIVE_MINIO_OBJECT_LOCK',
+  'runtime':'GitHub-hosted ubuntu-latest + live MinIO',
+  'minio_image_digest':'''$MINIO_DIGEST''',
+  'mc_image_digest':'''$MC_DIGEST''',
+  'bucket_created_with_object_lock':True,
+  'versioning_enabled':('Enabled' in version or 'enabled' in version.lower()),
+  'default_retention_mode_compliance':('COMPLIANCE' in ret.upper()),
+  'compliance_version_delete_blocked':($COMPLIANCE_RC != 0),
+  'legal_hold_enabled':('ON' in hold.upper() or 'ENABLED' in hold.upper()),
+  'legal_hold_version_delete_blocked':($HOLD_RC != 0),
+  'public_credentials_used':False,
+  'real_user_data_used':False,
+}
+report['status']='PASS' if all([
+ report['versioning_enabled'],
+ report['default_retention_mode_compliance'],
+ report['compliance_version_delete_blocked'],
+ report['legal_hold_enabled'],
+ report['legal_hold_version_delete_blocked'],
+]) else 'FAIL'
+(out/'report.json').write_text(json.dumps(report,indent=2))
+print(json.dumps(report,indent=2))
+if report['status']!='PASS': raise SystemExit(2)
+PY
+
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: m23b-minio-object-lock-live
+          path: avito-m23b-object-lock/out/
+          retention-days: 7
+
+      - if: always()
+        name: Stop MinIO
+        run: docker rm -f m23b-minio || true
