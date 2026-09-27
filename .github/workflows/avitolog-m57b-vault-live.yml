@@ -53,6 +53,9 @@ jobs:
       - name: Start real Vault 2.1.1 with Raft and TLS
         run: |
           docker pull hashicorp/vault:2.1.1
+          VAULT_UID=$(docker run --rm --entrypoint sh hashicorp/vault:2.1.1 -c 'id -u vault')
+          VAULT_GID=$(docker run --rm --entrypoint sh hashicorp/vault:2.1.1 -c 'id -g vault')
+          sudo chown -R "$VAULT_UID:$VAULT_GID" vault/data vault/config vault/certs
           docker run -d --name avitolog-vault             --cap-add=IPC_LOCK             -p 8200:8200             -v "$PWD/vault/config:/vault/config"             -v "$PWD/vault/certs:/vault/certs"             -v "$PWD/vault/data:/vault/data"             hashicorp/vault:2.1.1 server -config=/vault/config/vault.hcl
           for i in $(seq 1 60); do
             if curl --cacert vault/certs/ca.crt -sS https://127.0.0.1:8200/v1/sys/health >/dev/null; then exit 0; fi
