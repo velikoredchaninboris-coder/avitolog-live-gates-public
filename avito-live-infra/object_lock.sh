@@ -2,7 +2,7 @@
 set -euo pipefail
 OUT="avito-live-infra/out/object-lock"
 mkdir -p "$OUT"
-IMAGE="minio/minio:RELEASE.2025-09-07T16-13-09Z"
+IMAGE="quay.io/minio/minio:RELEASE.2025-07-23T15-54-02Z"
 docker pull "$IMAGE" >/dev/null
 DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE")"
 docker run -d --name avito-minio -p 9000:9000 \
