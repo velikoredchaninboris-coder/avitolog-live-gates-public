@@ -1,0 +1,85 @@
+name: AVITOLOG M23B Object Lock Lab
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/avitolog-m23b-object-lock-lab.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  object-lock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Start real MinIO
+        run: |
+          set -euo pipefail
+          docker pull quay.io/minio/minio:latest
+          docker image inspect quay.io/minio/minio:latest --format '{{index .RepoDigests 0}}' | tee minio_server_digest.txt
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=qaadmin \
+            -e MINIO_ROOT_PASSWORD=qa-only-password-123 \
+            quay.io/minio/minio:latest server /data
+          for i in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:9000/minio/health/live && exit 0
+            sleep 1
+          done
+          docker logs minio
+          exit 1
+      - name: Object Lock COMPLIANCE and legal hold drill
+        run: |
+          set -euo pipefail
+          docker pull quay.io/minio/mc:latest
+          docker image inspect quay.io/minio/mc:latest --format '{{index .RepoDigests 0}}' | tee minio_client_digest.txt
+          MC="docker run --rm --network host quay.io/minio/mc:latest"
+          $MC alias set local http://127.0.0.1:9000 qaadmin qa-only-password-123
+          $MC mb --with-lock local/evidence-lock
+          $MC version info local/evidence-lock | tee versioning.txt
+          $MC retention set --default COMPLIANCE 1d local/evidence-lock
+          printf 'AVITOLOG M23B synthetic evidence\n' > evidence.txt
+          $MC cp evidence.txt local/evidence-lock/evidence.txt
+          $MC stat local/evidence-lock/evidence.txt | tee object_stat.txt
+          set +e
+          $MC rm --force local/evidence-lock/evidence.txt > delete_under_retention.txt 2>&1
+          RETENTION_DELETE_RC=$?
+          set -e
+          test "$RETENTION_DELETE_RC" -ne 0
+          $MC legalhold set local/evidence-lock/evidence.txt
+          $MC legalhold info local/evidence-lock/evidence.txt | tee legalhold.txt
+          set +e
+          $MC rm --force local/evidence-lock/evidence.txt > delete_under_legalhold.txt 2>&1
+          LEGALHOLD_DELETE_RC=$?
+          set -e
+          test "$LEGALHOLD_DELETE_RC" -ne 0
+          python3 - <<'PY'
+          import json, pathlib
+          report={
+            "gate":"M23B_REAL_MINIO_OBJECT_LOCK_LAB",
+            "bucket_object_lock":True,
+            "versioning_enabled":True,
+            "default_retention_mode":"COMPLIANCE",
+            "retention_delete_blocked":True,
+            "legal_hold_set":True,
+            "legal_hold_delete_blocked":True,
+            "data_classification":"SYNTHETIC_QA_ONLY",
+            "durable_external_target":False,
+            "status":"PASS_LAB_NOT_PRODUCTION"
+          }
+          pathlib.Path("m23b_report.json").write_text(json.dumps(report,indent=2))
+          print(json.dumps(report,indent=2))
+          PY
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: m23b-object-lock-lab
+          path: |
+            m23b_report.json
+            minio_server_digest.txt
+            minio_client_digest.txt
+            versioning.txt
+            object_stat.txt
+            legalhold.txt
+            delete_under_retention.txt
+            delete_under_legalhold.txt
+          retention-days: 7
