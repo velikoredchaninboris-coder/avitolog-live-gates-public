@@ -118,6 +118,11 @@ test -n "$USER_ID" && test "$USER_ID" != "null"
 phase "user-lookup:ok"
 
 bin/kcadm.sh set-password -r avitolog   --userid "$USER_ID"   --new-password "$USER_PASS"
+bin/kcadm.sh update "users/$USER_ID" -r avitolog -s enabled=true -s emailVerified=true -s totp=true -s 'requiredActions=[]' >/dev/null
+bin/kcadm.sh get "users/$USER_ID" -r avitolog | jq '{enabled,emailVerified,totp,requiredActions}' > "$GITHUB_WORKSPACE/$OUT/user-state.json"
+test "$(jq -r '.enabled' "$GITHUB_WORKSPACE/$OUT/user-state.json")" = "true"
+test "$(jq -r '.totp' "$GITHUB_WORKSPACE/$OUT/user-state.json")" = "true"
+test "$(jq '.requiredActions|length' "$GITHUB_WORKSPACE/$OUT/user-state.json")" = "0"
 phase "password-set:ok"
 
 CRED_TYPES="$(bin/kcadm.sh get "users/$USER_ID/credentials" -r avitolog | jq -r '.[].type' | sort -u)"
