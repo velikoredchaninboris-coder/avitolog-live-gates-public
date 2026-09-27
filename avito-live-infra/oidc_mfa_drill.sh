@@ -104,8 +104,13 @@ cp /tmp/discovery.json "$OUT/discovery.json"
 cd /tmp/keycloak
 bin/kcadm.sh config credentials --server http://127.0.0.1:8080 --realm master \
   --user avitolog-admin --password AVITOLOG_CI_SYNTHETIC_ADMIN_2026 >/dev/null
-bin/kcadm.sh set-password -r avitolog --username mfa-user \
-  --new-password AVITOLOG_CI_SYNTHETIC_PASSWORD_2026 >/dev/null
+USER_ID="$(bin/kcadm.sh get users -r avitolog -q username=mfa-user | jq -r '.[0].id')"
+test -n "$USER_ID" && test "$USER_ID" != "null"
+bin/kcadm.sh update "users/$USER_ID/reset-password" -r avitolog \
+  -s type=password -s value=AVITOLOG_CI_SYNTHETIC_PASSWORD_2026 -s temporary=false -n
+CRED_TYPES="$(bin/kcadm.sh get "users/$USER_ID/credentials" -r avitolog | jq -r '.[].type' | sort -u)"
+grep -qx 'otp' <<<"$CRED_TYPES"
+grep -qx 'password' <<<"$CRED_TYPES"
 cd "$GITHUB_WORKSPACE"
 
 TOKEN_URL="http://127.0.0.1:8080/realms/avitolog/protocol/openid-connect/token"
