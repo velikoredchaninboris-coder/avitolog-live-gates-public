@@ -151,7 +151,9 @@ PY
 phase "password-only-negative:start"
 CODE_NO_OTP="$(curl -sS -o /tmp/no-otp.json -w '%{http_code}' -X POST "$TOKEN_URL"   -H 'Content-Type: application/x-www-form-urlencoded'   --data-urlencode 'client_id=avitolog-ci'   --data-urlencode 'grant_type=password'   --data-urlencode 'username=mfa-user'   --data-urlencode "password=$USER_PASS"   --data-urlencode 'scope=openid')"
 printf '%s\n' "$CODE_NO_OTP" > "$OUT/password-only-http-code.txt"
-test "$CODE_NO_OTP" = "401"
+jq '{error,error_description}' /tmp/no-otp.json > "$OUT/password-only-error.json"
+test "$CODE_NO_OTP" = "400"
+test "$(jq -r '.error' /tmp/no-otp.json)" = "invalid_grant"
 phase "password-only-negative:ok"
 
 TOTP1="$(python3 /tmp/totp.py "$OTP_SECRET")"
@@ -159,7 +161,9 @@ WRONG="$(python3 -c 'import sys; print(f"{(int(sys.argv[1])+1)%1000000:06d}")' "
 phase "wrong-totp-negative:start"
 CODE_WRONG="$(curl -sS -o /tmp/wrong.json -w '%{http_code}' -X POST "$TOKEN_URL"   -H 'Content-Type: application/x-www-form-urlencoded'   --data-urlencode 'client_id=avitolog-ci'   --data-urlencode 'grant_type=password'   --data-urlencode 'username=mfa-user'   --data-urlencode "password=$USER_PASS"   --data-urlencode "totp=$WRONG"   --data-urlencode 'scope=openid')"
 printf '%s\n' "$CODE_WRONG" > "$OUT/wrong-totp-http-code.txt"
-test "$CODE_WRONG" = "401"
+jq '{error,error_description}' /tmp/wrong.json > "$OUT/wrong-totp-error.json"
+test "$CODE_WRONG" = "400"
+test "$(jq -r '.error' /tmp/wrong.json)" = "invalid_grant"
 phase "wrong-totp-negative:ok"
 
 phase "correct-totp-login-1:start"
@@ -236,8 +240,8 @@ report={
   'wrong_totp_http_code':int(code_wrong),
   'correct_totp_1_http_code':int(code1),
   'correct_totp_2_http_code':int(code2),
-  'password_only_denied':code_no=='401',
-  'wrong_totp_denied':code_wrong=='401',
+  'password_only_denied':code_no=='400',
+  'wrong_totp_denied':code_wrong=='400',
   'mfa_token1_signature_verified':True,
   'mfa_token2_signature_verified':True,
   'token1_issuer_match':a.get('iss')==issuer,
