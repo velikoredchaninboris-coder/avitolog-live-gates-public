@@ -1,0 +1,166 @@
+name: AVITOLOG M24B WORM Locked Restore Lab
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/avitolog-m24b-worm-restore-lab.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  worm-locked-restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: avito_worm_restore
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d avito_worm_restore"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: avito_worm_restore
+      AWS_DEFAULT_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Verify immutable DR inputs
+        run: |
+          set -euo pipefail
+          echo '37aa20760433b0e652b7d98f3ac6f151c01d0ba88abe0cf6c5569806546281fb  avito-m52b-canonical/001_core.up.sql' | sha256sum -c -
+          echo 'b35abfbdb52164f66713bf361066d2a2863a97872d646d1cf687e1215232c525  avito-m52b-canonical/002_immutability_guards.up.sql' | sha256sum -c -
+          echo 'bccbe4553633ef40f2bd2d4969e0faaea1832c01ab949fe7e2a3ae060ec4fff9  avito-m24b-dr/003_live_hardening.sql' | sha256sum -c -
+          echo '8bf4566cb8271d175dc006f8693993ecc485222b777fb7f0bba88df534265674  avito-m24b-dr/source_data.json' | sha256sum -c -
+          echo 'e4adec57c3342e2d6d3f32eb1da7e29b69d23e626d3ca420f7e341f576d42836  avito-m24b-dr/source_manifest.json' | sha256sum -c -
+
+      - name: Build deterministic backup object
+        run: |
+          set -euo pipefail
+          mkdir -p object_payload/avito-m24b-dr object_payload/avito-m52b-canonical evidence
+          cp avito-m24b-dr/source_data.json object_payload/avito-m24b-dr/
+          cp avito-m24b-dr/source_manifest.json object_payload/avito-m24b-dr/
+          cp avito-m24b-dr/003_live_hardening.sql object_payload/avito-m24b-dr/
+          cp avito-m24b-dr/restore_and_verify_v2.py object_payload/avito-m24b-dr/
+          cp avito-m52b-canonical/001_core.up.sql object_payload/avito-m52b-canonical/
+          cp avito-m52b-canonical/002_immutability_guards.up.sql object_payload/avito-m52b-canonical/
+          tar --sort=name --mtime='UTC 2026-09-27' --owner=0 --group=0 --numeric-owner \
+            -czf m24b-backup-object.tar.gz -C object_payload .
+          sha256sum m24b-backup-object.tar.gz | tee evidence/source_object.sha256
+
+      - name: Start pinned MinIO and lock bucket
+        run: |
+          set -euo pipefail
+          REL="minio.linux-amd64.RELEASE.2025-09-07T16-13-09Z"
+          URL="https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/$REL"
+          EXPECTED="7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f"
+          curl -fL --retry 3 --retry-delay 2 -o "$REL" "$URL"
+          echo "$EXPECTED  $REL" | sha256sum -c -
+          chmod +x "$REL"
+          ROOT_USER="m24b$(openssl rand -hex 6)"
+          ROOT_PASS="$(openssl rand -hex 24)"
+          echo "::add-mask::$ROOT_USER"
+          echo "::add-mask::$ROOT_PASS"
+          printf '%s' "$ROOT_USER" >/tmp/m24b_minio_user
+          printf '%s' "$ROOT_PASS" >/tmp/m24b_minio_pass
+          mkdir -p /tmp/minio-worm
+          MINIO_ROOT_USER="$ROOT_USER" MINIO_ROOT_PASSWORD="$ROOT_PASS" \
+            "./$REL" server /tmp/minio-worm --address ":9000" --console-address ":9001" \
+            >evidence/minio.log 2>&1 &
+          echo $! >/tmp/minio_pid
+          for i in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1 && exit 0
+            sleep 1
+          done
+          cat evidence/minio.log
+          exit 1
+
+      - name: Store under COMPLIANCE, block delete, read back locked version
+        run: |
+          set -euo pipefail
+          export AWS_ACCESS_KEY_ID="$(cat /tmp/m24b_minio_user)"
+          export AWS_SECRET_ACCESS_KEY="$(cat /tmp/m24b_minio_pass)"
+          EP="http://127.0.0.1:9000"
+          aws --endpoint-url "$EP" s3api create-bucket --bucket avitolog-dr-worm --object-lock-enabled-for-bucket >/dev/null
+          aws --endpoint-url "$EP" s3api put-object-lock-configuration \
+            --bucket avitolog-dr-worm \
+            --object-lock-configuration '{"ObjectLockEnabled":"Enabled","Rule":{"DefaultRetention":{"Mode":"COMPLIANCE","Days":1}}}'
+          PUT="$(aws --endpoint-url "$EP" s3api put-object \
+            --bucket avitolog-dr-worm --key m24b-backup-object.tar.gz \
+            --body m24b-backup-object.tar.gz)"
+          VID="$(jq -r '.VersionId' <<<"$PUT")"
+          test -n "$VID" && test "$VID" != "null"
+          RET="$(aws --endpoint-url "$EP" s3api get-object-retention \
+            --bucket avitolog-dr-worm --key m24b-backup-object.tar.gz --version-id "$VID")"
+          test "$(jq -r '.Retention.Mode' <<<"$RET")" = "COMPLIANCE"
+          aws --endpoint-url "$EP" s3api put-object-legal-hold \
+            --bucket avitolog-dr-worm --key m24b-backup-object.tar.gz --version-id "$VID" \
+            --legal-hold '{"Status":"ON"}'
+          set +e
+          aws --endpoint-url "$EP" s3api delete-object \
+            --bucket avitolog-dr-worm --key m24b-backup-object.tar.gz --version-id "$VID" \
+            >evidence/delete.stdout 2>evidence/delete.stderr
+          DEL_RC=$?
+          set -e
+          test "$DEL_RC" -ne 0
+          aws --endpoint-url "$EP" s3api get-object \
+            --bucket avitolog-dr-worm --key m24b-backup-object.tar.gz --version-id "$VID" \
+            locked-readback.tar.gz >/dev/null
+          sha256sum locked-readback.tar.gz | tee evidence/readback_object.sha256
+          SRC_SHA="$(cut -d' ' -f1 evidence/source_object.sha256)"
+          DST_SHA="$(cut -d' ' -f1 evidence/readback_object.sha256)"
+          test "$SRC_SHA" = "$DST_SHA"
+          printf '%s\n' "$VID" > evidence/version_id.txt
+          printf '%s\n' "$RET" > evidence/retention.json
+
+      - name: Restore only from locked readback object
+        run: |
+          set -euo pipefail
+          mkdir restored
+          tar -xzf locked-readback.tar.gz -C restored
+          cd restored
+          python3 avito-m24b-dr/restore_and_verify_v2.py
+          cp avito-m24b-dr/out/restore_report.json "$GITHUB_WORKSPACE/evidence/restore_report.json"
+
+      - name: Build boundary-aware evidence
+        run: |
+          python3 - <<'PY'
+          import json, pathlib
+          rr=json.load(open("evidence/restore_report.json"))
+          report={
+            "gate":"M24B_WORM_LOCKED_RESTORE_LAB",
+            "object_lock_enabled":True,
+            "retention_mode":"COMPLIANCE",
+            "legal_hold_enabled":True,
+            "version_specific_delete_blocked":True,
+            "locked_readback_sha_match":True,
+            "restore_tables_exact":len(rr.get("tables",{}))==18 and all(v.get("match") for v in rr["tables"].values()),
+            "restore_guards_pass":all(rr.get("guards",{}).values()),
+            "persistent_external_worm_target":False,
+            "actual_monthly_scheduled_run":False,
+            "status":"PASS_MECHANICS_RESIDUAL_PRODUCTION_BLOCKER"
+          }
+          pathlib.Path("evidence/m24b_worm_restore_report.json").write_text(json.dumps(report,indent=2)+"\n")
+          assert report["restore_tables_exact"] and report["restore_guards_pass"]
+          PY
+
+      - name: Upload redacted WORM restore evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: m24b-worm-locked-restore-lab
+          path: |
+            evidence/m24b_worm_restore_report.json
+            evidence/source_object.sha256
+            evidence/readback_object.sha256
+            evidence/version_id.txt
+            evidence/retention.json
+            evidence/delete.stderr
+            evidence/restore_report.json
+          retention-days: 7
