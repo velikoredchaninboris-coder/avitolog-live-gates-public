@@ -2,14 +2,18 @@
 set -euo pipefail
 OUT="avito-live-infra/out/object-lock"
 mkdir -p "$OUT"
-IMAGE="quay.io/minio/minio:RELEASE.2025-07-23T15-54-02Z"
-docker pull "$IMAGE" >/dev/null
-DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE")"
-docker run -d --name avito-minio -p 9000:9000 \
-  -e MINIO_ROOT_USER=ciadmin \
-  -e MINIO_ROOT_PASSWORD=ciadmin123 \
-  "$IMAGE" server /data --console-address ":9001" >/dev/null
-cleanup(){ docker rm -f avito-minio >/dev/null 2>&1 || true; }
+REL="minio.RELEASE.2025-09-07T16-13-09Z"
+BASE="https://dl.min.io/server/minio/release/linux-amd64/archive"
+curl -fsSLO "$BASE/$REL"
+curl -fsSLO "$BASE/$REL.sha256sum"
+sha256sum -c "$REL.sha256sum"
+chmod +x "$REL"
+DIGEST="$(sha256sum "$REL" | awk '{print $1}')"
+mkdir -p "$OUT/data"
+MINIO_ROOT_USER=ciadmin MINIO_ROOT_PASSWORD=ciadmin123 \
+  "./$REL" server "$OUT/data" --address ":9000" --console-address ":9001" >"$OUT/minio.log" 2>&1 &
+MINIO_PID=$!
+cleanup(){ kill "$MINIO_PID" >/dev/null 2>&1 || true; wait "$MINIO_PID" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 for i in $(seq 1 60); do
   curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1 && break
@@ -47,7 +51,7 @@ import json,sys
 out,digest,v1,v2,mode,del_rc,h1,h1b,vc,lock,ver=sys.argv[1:]
 r={
  "gate":"M23B_MINIO_OBJECT_LOCK_LIVE_MECHANICS",
- "image_digest":digest,
+ "binary_sha256":digest,
  "bucket_object_lock":json.loads(lock),
  "bucket_versioning":json.loads(ver),
  "v1_version_id_present":bool(v1 and v1!="null"),
