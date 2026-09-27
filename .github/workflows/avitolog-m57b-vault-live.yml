@@ -41,12 +41,12 @@ jobs:
             node_id = "avitolog-vault-node-1"
           }
           listener "tcp" {
-            address       = "0.0.0.0:8200"
+            address       = "0.0.0.0:18200"
             tls_cert_file = "/vault/certs/server.crt"
             tls_key_file  = "/vault/certs/server.key"
           }
-          api_addr     = "https://127.0.0.1:8200"
-          cluster_addr = "https://127.0.0.1:8201"
+          api_addr     = "https://127.0.0.1:18200"
+          cluster_addr = "https://127.0.0.1:18201"
           disable_mlock = true
           ui = false
           EOF
@@ -56,9 +56,9 @@ jobs:
           VAULT_UID=$(docker run --rm --entrypoint sh hashicorp/vault:2.1.1 -c 'id -u vault')
           VAULT_GID=$(docker run --rm --entrypoint sh hashicorp/vault:2.1.1 -c 'id -g vault')
           sudo chown -R "$VAULT_UID:$VAULT_GID" vault/data vault/config vault/certs
-          docker run -d --name avitolog-vault             --cap-add=IPC_LOCK             -p 8200:8200             -v "$PWD/vault/config:/vault/config"             -v "$PWD/vault/certs:/vault/certs"             -v "$PWD/vault/data:/vault/data"             hashicorp/vault:2.1.1 server -config=/vault/config/vault.hcl
+          docker run -d --name avitolog-vault             --cap-add=IPC_LOCK             -p 18200:18200             -v "$PWD/vault/config:/vault/config"             -v "$PWD/vault/certs:/vault/certs"             -v "$PWD/vault/data:/vault/data"             hashicorp/vault:2.1.1 server -config=/vault/config/vault.hcl
           for i in $(seq 1 60); do
-            if curl --cacert vault/certs/ca.crt -sS https://127.0.0.1:8200/v1/sys/health >/dev/null; then exit 0; fi
+            if curl --cacert vault/certs/ca.crt -sS https://127.0.0.1:18200/v1/sys/health >/dev/null; then exit 0; fi
             sleep 1
           done
           docker logs avitolog-vault
@@ -66,7 +66,7 @@ jobs:
       - name: Initialize, unseal, auth, lease, rotate and revoke
         run: |
           set -euo pipefail
-          export VAULT_ADDR=https://127.0.0.1:8200
+          export VAULT_ADDR=https://127.0.0.1:18200
           export VAULT_CACERT=/vault/certs/ca.crt
           vexec(){ docker exec -e VAULT_ADDR="$VAULT_ADDR" -e VAULT_CACERT="$VAULT_CACERT" "$@" avitolog-vault vault; }
           # init output stays only in runner temp files and is never uploaded.
