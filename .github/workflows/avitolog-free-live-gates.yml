@@ -1,0 +1,75 @@
+name: AVITOLOG Public Free Live Gates
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 4 1 * *'
+permissions:
+  contents: read
+jobs:
+  canonical-fullscale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: avito_canonical_bench
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d avito_canonical_bench"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: avito_canonical_bench
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify pinned inputs
+        run: |
+          echo '37aa20760433b0e652b7d98f3ac6f151c01d0ba88abe0cf6c5569806546281fb  avito-m52b-canonical/001_core.up.sql' | sha256sum -c -
+          echo 'b35abfbdb52164f66713bf361066d2a2863a97872d646d1cf687e1215232c525  avito-m52b-canonical/002_immutability_guards.up.sql' | sha256sum -c -
+          echo '5fa2034404830bd26abb8e0ea54ca1bf792810e41204ad7037076ce304248cfd  avito-m52b-canonical/run.sh' | sha256sum -c -
+      - name: Run exact canonical full-scale benchmark
+        run: chmod +x avito-m52b-canonical/run.sh && avito-m52b-canonical/run.sh
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m52b-canonical-fullscale
+          path: avito-m52b-canonical/out/
+          retention-days: 7
+  fresh-dr-restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: avito_dr_restore
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d avito_dr_restore"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: avito_dr_restore
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL client
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+      - name: Fresh independent restore and guard verification
+        run: python3 avito-m24b-dr/restore_and_verify.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m24b-fresh-dr-restore
+          path: avito-m24b-dr/out/
+          retention-days: 7
