@@ -99,6 +99,15 @@ if ! test -s /tmp/discovery.json; then
   exit 1
 fi
 cp /tmp/discovery.json "$OUT/discovery.json"
+
+# Realm import reliably creates the OTP credential; set the synthetic password via supported admin CLI.
+cd /tmp/keycloak
+bin/kcadm.sh config credentials --server http://127.0.0.1:8080 --realm master \
+  --user avitolog-admin --password AVITOLOG_CI_SYNTHETIC_ADMIN_2026 >/dev/null
+bin/kcadm.sh set-password -r avitolog --username mfa-user \
+  --new-password AVITOLOG_CI_SYNTHETIC_PASSWORD_2026 --temporary=false >/dev/null
+cd "$GITHUB_WORKSPACE"
+
 TOKEN_URL="http://127.0.0.1:8080/realms/avitolog/protocol/openid-connect/token"
 PASSWORD="AVITOLOG_CI_SYNTHETIC_PASSWORD_2026"
 SECRET="JBSWY3DPEHPK3PXP"
