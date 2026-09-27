@@ -1,0 +1,101 @@
+name: AVITOLOG M24B Object Storage DR
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/avitolog-m24b-object-storage-dr.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '23 3 1 * *'
+
+permissions:
+  contents: read
+
+jobs:
+  build-backup-object:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify immutable DR inputs
+        run: |
+          echo '37aa20760433b0e652b7d98f3ac6f151c01d0ba88abe0cf6c5569806546281fb  avito-m52b-canonical/001_core.up.sql' | sha256sum -c -
+          echo 'b35abfbdb52164f66713bf361066d2a2863a97872d646d1cf687e1215232c525  avito-m52b-canonical/002_immutability_guards.up.sql' | sha256sum -c -
+          echo 'bccbe4553633ef40f2bd2d4969e0faaea1832c01ab949fe7e2a3ae060ec4fff9  avito-m24b-dr/003_live_hardening.sql' | sha256sum -c -
+          echo '8bf4566cb8271d175dc006f8693993ecc485222b777fb7f0bba88df534265674  avito-m24b-dr/source_data.json' | sha256sum -c -
+          echo 'e4adec57c3342e2d6d3f32eb1da7e29b69d23e626d3ca420f7e341f576d42836  avito-m24b-dr/source_manifest.json' | sha256sum -c -
+      - name: Build deterministic backup payload
+        run: |
+          mkdir -p object_payload/avito-m24b-dr object_payload/avito-m52b-canonical
+          cp avito-m24b-dr/source_data.json object_payload/avito-m24b-dr/
+          cp avito-m24b-dr/source_manifest.json object_payload/avito-m24b-dr/
+          cp avito-m24b-dr/003_live_hardening.sql object_payload/avito-m24b-dr/
+          cp avito-m24b-dr/restore_and_verify_v2.py object_payload/avito-m24b-dr/
+          cp avito-m52b-canonical/001_core.up.sql object_payload/avito-m52b-canonical/
+          cp avito-m52b-canonical/002_immutability_guards.up.sql object_payload/avito-m52b-canonical/
+          tar --sort=name --mtime='UTC 2026-09-27' --owner=0 --group=0 --numeric-owner             -czf m24b-backup-object.tar.gz -C object_payload .
+          sha256sum m24b-backup-object.tar.gz > m24b-backup-object.tar.gz.sha256
+          stat -c '%s' m24b-backup-object.tar.gz > m24b-backup-object.size
+      - name: Upload external backup object
+        uses: actions/upload-artifact@v4
+        with:
+          name: m24b-backup-object
+          path: |
+            m24b-backup-object.tar.gz
+            m24b-backup-object.tar.gz.sha256
+            m24b-backup-object.size
+          retention-days: 30
+
+  restore-from-object-storage:
+    needs: build-backup-object
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: avito_dr_object_restore
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d avito_dr_object_restore"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: avito_dr_object_restore
+    steps:
+      - name: Download backup object from Actions artifact storage
+        uses: actions/download-artifact@v4
+        with:
+          name: m24b-backup-object
+          path: downloaded
+      - name: Verify object readback SHA and extract
+        run: |
+          cd downloaded
+          sha256sum -c m24b-backup-object.tar.gz.sha256
+          mkdir restored
+          tar -xzf m24b-backup-object.tar.gz -C restored
+      - name: Fresh restore from downloaded backup object
+        run: |
+          cd downloaded/restored
+          python3 avito-m24b-dr/restore_and_verify_v2.py
+      - name: Build object-restore evidence
+        if: always()
+        run: |
+          mkdir -p evidence
+          cp downloaded/m24b-backup-object.tar.gz.sha256 evidence/
+          cp downloaded/m24b-backup-object.size evidence/
+          if [ -f downloaded/restored/avito-m24b-dr/out/restore_report.json ]; then
+            cp downloaded/restored/avito-m24b-dr/out/restore_report.json evidence/
+          fi
+          printf '{"source":"github-actions-artifact-storage","fresh_runner":true,"scheduled_monthly":true}\n' > evidence/object_restore_context.json
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m24b-object-storage-restore-evidence
+          path: evidence/
+          retention-days: 30
