@@ -1,0 +1,116 @@
+name: AVITOLOG M57B Vault Lab
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/avitolog-m57b-vault-lab.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  vault-live-lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Start PostgreSQL and Vault
+        run: |
+          set -euo pipefail
+          docker pull postgres@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+          docker pull hashicorp/vault:1.20.4
+          docker image inspect hashicorp/vault:1.20.4 --format '{{index .RepoDigests 0}}' | tee vault_image_digest.txt
+          docker network create avitolog-vault-net
+          docker run -d --name pg --network avitolog-vault-net --network-alias pg \
+            -e POSTGRES_USER=vault_admin \
+            -e POSTGRES_PASSWORD=qa-root-db-password \
+            -e POSTGRES_DB=vault_lab \
+            postgres@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+          for i in $(seq 1 60); do
+            docker exec pg pg_isready -U vault_admin -d vault_lab && break
+            sleep 1
+          done
+          docker run -d --name vault --network avitolog-vault-net --network-alias vault \
+            --cap-add=IPC_LOCK \
+            -e VAULT_DEV_ROOT_TOKEN_ID=qa-root-token \
+            -e VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200 \
+            hashicorp/vault:1.20.4
+          for i in $(seq 1 60); do
+            docker exec -e VAULT_ADDR=http://127.0.0.1:8200 -e VAULT_TOKEN=qa-root-token vault vault status >/dev/null 2>&1 && exit 0
+            sleep 1
+          done
+          docker logs vault
+          exit 1
+      - name: Dynamic credential lease rotation revoke drill
+        run: |
+          set -euo pipefail
+          V="docker exec -e VAULT_ADDR=http://127.0.0.1:8200 -e VAULT_TOKEN=qa-root-token vault vault"
+          $V secrets enable database
+          $V write database/config/postgresql \
+            plugin_name=postgresql-database-plugin \
+            allowed_roles=avitolog-role \
+            connection_url='postgresql://{{username}}:{{password}}@pg:5432/vault_lab?sslmode=disable' \
+            username=vault_admin \
+            password=qa-root-db-password
+          $V write database/roles/avitolog-role \
+            db_name=postgresql \
+            creation_statements="CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}'; GRANT CONNECT ON DATABASE vault_lab TO \"{{name}}\";" \
+            default_ttl=60s max_ttl=300s
+          CREDS="$($V read -format=json database/creds/avitolog-role)"
+          echo "$CREDS" > creds_internal.json
+          USERNAME=$(python3 -c 'import json;print(json.load(open("creds_internal.json"))["data"]["username"])')
+          PASSWORD=$(python3 -c 'import json;print(json.load(open("creds_internal.json"))["data"]["password"])')
+          LEASE_ID=$(python3 -c 'import json;print(json.load(open("creds_internal.json"))["lease_id"])')
+          LEASE_DURATION=$(python3 -c 'import json;print(json.load(open("creds_internal.json"))["lease_duration"])')
+          test -n "$LEASE_ID"
+          docker run --rm --network avitolog-vault-net \
+            -e PGPASSWORD="$PASSWORD" \
+            postgres@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f \
+            psql -h pg -U "$USERNAME" -d vault_lab -Atqc 'select current_user;' | tee dynamic_login_before_revoke.txt
+          $V lease revoke "$LEASE_ID"
+          set +e
+          docker run --rm --network avitolog-vault-net \
+            -e PGPASSWORD="$PASSWORD" \
+            postgres@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f \
+            psql -h pg -U "$USERNAME" -d vault_lab -Atqc 'select 1;' > login_after_revoke.txt 2>&1
+          POST_REVOKE_RC=$?
+          set -e
+          test "$POST_REVOKE_RC" -ne 0
+          $V write -force database/rotate-root/postgresql
+          CREDS2="$($V read -format=json database/creds/avitolog-role)"
+          echo "$CREDS2" > creds2_internal.json
+          USERNAME2=$(python3 -c 'import json;print(json.load(open("creds2_internal.json"))["data"]["username"])')
+          PASSWORD2=$(python3 -c 'import json;print(json.load(open("creds2_internal.json"))["data"]["password"])')
+          LEASE_ID2=$(python3 -c 'import json;print(json.load(open("creds2_internal.json"))["lease_id"])')
+          docker run --rm --network avitolog-vault-net \
+            -e PGPASSWORD="$PASSWORD2" \
+            postgres@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f \
+            psql -h pg -U "$USERNAME2" -d vault_lab -Atqc 'select current_user;' | tee dynamic_login_after_root_rotation.txt
+          $V lease revoke "$LEASE_ID2"
+          rm -f creds_internal.json creds2_internal.json
+          python3 - <<'PY'
+          import json, pathlib, os
+          report={
+            "gate":"M57B_HASHICORP_VAULT_LIVE_LAB",
+            "vault_auth":True,
+            "dynamic_postgres_credential":True,
+            "lease_revoke_invalidated_db_login":True,
+            "database_root_rotation":True,
+            "new_dynamic_credential_after_rotation":True,
+            "credential_material_exported":False,
+            "vault_mode":"DEV_EPHEMERAL",
+            "durable_ha_vault":False,
+            "status":"PASS_LAB_NOT_PRODUCTION"
+          }
+          pathlib.Path("m57b_vault_report.json").write_text(json.dumps(report,indent=2))
+          print(json.dumps(report,indent=2))
+          PY
+      - name: Upload redacted evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: m57b-vault-live-lab
+          path: |
+            m57b_vault_report.json
+            vault_image_digest.txt
+            dynamic_login_before_revoke.txt
+            dynamic_login_after_root_rotation.txt
+            login_after_revoke.txt
+          retention-days: 7
