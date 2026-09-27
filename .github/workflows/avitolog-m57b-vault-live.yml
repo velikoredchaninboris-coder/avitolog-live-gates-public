@@ -1,0 +1,171 @@
+name: AVITOLOG M57B Vault Live
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/avitolog-m57b-vault-live.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vault-live-drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare TLS and Vault config
+        run: |
+          set -euo pipefail
+          mkdir -p vault/{certs,config,data} evidence
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1             -keyout vault/certs/server.key -out vault/certs/ca.crt             -subj "/CN=AVITOLOG Vault CI CA"
+          cat > vault/certs/openssl.cnf <<'EOF'
+          [req]
+          distinguished_name=req_distinguished_name
+          req_extensions=v3_req
+          prompt=no
+          [req_distinguished_name]
+          CN=localhost
+          [v3_req]
+          subjectAltName=@alt_names
+          [alt_names]
+          DNS.1=localhost
+          IP.1=127.0.0.1
+          EOF
+          openssl req -new -newkey rsa:2048 -nodes             -keyout vault/certs/server.key -out vault/certs/server.csr             -config vault/certs/openssl.cnf
+          openssl x509 -req -in vault/certs/server.csr             -CA vault/certs/ca.crt -CAkey vault/certs/server.key -CAcreateserial             -out vault/certs/server.crt -days 1             -extensions v3_req -extfile vault/certs/openssl.cnf
+          cat > vault/config/vault.hcl <<'EOF'
+          storage "raft" {
+            path    = "/vault/data"
+            node_id = "avitolog-vault-node-1"
+          }
+          listener "tcp" {
+            address       = "0.0.0.0:8200"
+            tls_cert_file = "/vault/certs/server.crt"
+            tls_key_file  = "/vault/certs/server.key"
+          }
+          api_addr     = "https://127.0.0.1:8200"
+          cluster_addr = "https://127.0.0.1:8201"
+          disable_mlock = true
+          ui = false
+          EOF
+      - name: Start real Vault 2.1.1 with Raft and TLS
+        run: |
+          docker pull hashicorp/vault:2.1.1
+          docker run -d --name avitolog-vault             --cap-add=IPC_LOCK             -p 8200:8200             -v "$PWD/vault/config:/vault/config"             -v "$PWD/vault/certs:/vault/certs"             -v "$PWD/vault/data:/vault/data"             hashicorp/vault:2.1.1 server -config=/vault/config/vault.hcl
+          for i in $(seq 1 60); do
+            if curl --cacert vault/certs/ca.crt -sS https://127.0.0.1:8200/v1/sys/health >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          docker logs avitolog-vault
+          exit 1
+      - name: Initialize, unseal, auth, lease, rotate and revoke
+        run: |
+          set -euo pipefail
+          export VAULT_ADDR=https://127.0.0.1:8200
+          export VAULT_CACERT=/vault/certs/ca.crt
+          vexec(){ docker exec -e VAULT_ADDR="$VAULT_ADDR" -e VAULT_CACERT="$VAULT_CACERT" "$@" avitolog-vault vault; }
+          # init output stays only in runner temp files and is never uploaded.
+          docker exec -e VAULT_ADDR="$VAULT_ADDR" -e VAULT_CACERT="$VAULT_CACERT" avitolog-vault             vault operator init -key-shares=1 -key-threshold=1 -format=json > /tmp/vault-init.json
+          UNSEAL=$(jq -r '.unseal_keys_b64[0]' /tmp/vault-init.json)
+          ROOT=$(jq -r '.root_token' /tmp/vault-init.json)
+          docker exec -e VAULT_ADDR="$VAULT_ADDR" -e VAULT_CACERT="$VAULT_CACERT" avitolog-vault vault operator unseal "$UNSEAL" >/dev/null
+          V="docker exec -e VAULT_ADDR=$VAULT_ADDR -e VAULT_CACERT=$VAULT_CACERT -e VAULT_TOKEN=$ROOT avitolog-vault vault"
+          $V status -format=json > /tmp/status.json
+          $V auth enable approle
+          $V secrets enable -path=kv -version=2 kv
+          cat > /tmp/avitolog-read.hcl <<'EOF'
+          path "kv/data/avitolog/b2" {
+            capabilities = ["read"]
+          }
+          EOF
+          docker cp /tmp/avitolog-read.hcl avitolog-vault:/tmp/avitolog-read.hcl
+          $V policy write avitolog-read /tmp/avitolog-read.hcl
+          $V write auth/approle/role/avitolog             token_policies="avitolog-read"             token_ttl=30s token_max_ttl=120s             secret_id_ttl=120s
+          $V kv put kv/avitolog/b2 credential="CANARY_V1" >/dev/null
+          ROLE_ID=$($V read -field=role_id auth/approle/role/avitolog/role-id)
+          SECRET_ID=$($V write -field=secret_id -f auth/approle/role/avitolog/secret-id)
+          $V write -format=json auth/approle/login role_id="$ROLE_ID" secret_id="$SECRET_ID" > /tmp/login1.json
+          APP_TOKEN=$(jq -r '.auth.client_token' /tmp/login1.json)
+          LEASE1=$(jq -r '.auth.lease_duration' /tmp/login1.json)
+          RENEWABLE=$(jq -r '.auth.renewable' /tmp/login1.json)
+          # Read v1 with scoped token.
+          docker exec -e VAULT_ADDR="$VAULT_ADDR" -e VAULT_CACERT="$VAULT_CACERT" -e VAULT_TOKEN="$APP_TOKEN" avitolog-vault             vault kv get -format=json kv/avitolog/b2 > /tmp/read1.json
+          V1=$(jq -r '.data.data.credential' /tmp/read1.json)
+          V1H=$(printf '%s' "$V1" | sha256sum | cut -d' ' -f1)
+          # Scoped token must not write.
+          set +e
+          docker exec -e VAULT_ADDR="$VAULT_ADDR" -e VAULT_CACERT="$VAULT_CACERT" -e VAULT_TOKEN="$APP_TOKEN" avitolog-vault             vault kv put kv/avitolog/b2 credential="SHOULD_NOT_WRITE" >/tmp/deny-write.out 2>&1
+          DENY_WRITE_RC=$?
+          docker exec -e VAULT_ADDR="$VAULT_ADDR" -e VAULT_CACERT="$VAULT_CACERT" -e VAULT_TOKEN="$APP_TOKEN" avitolog-vault             vault kv get kv/avitolog/other >/tmp/deny-other.out 2>&1
+          DENY_OTHER_RC=$?
+          set -e
+          # Rotate secret, same scoped token reads only new version.
+          $V kv put kv/avitolog/b2 credential="CANARY_V2" >/dev/null
+          docker exec -e VAULT_ADDR="$VAULT_ADDR" -e VAULT_CACERT="$VAULT_CACERT" -e VAULT_TOKEN="$APP_TOKEN" avitolog-vault             vault kv get -format=json kv/avitolog/b2 > /tmp/read2.json
+          V2=$(jq -r '.data.data.credential' /tmp/read2.json)
+          V2H=$(printf '%s' "$V2" | sha256sum | cut -d' ' -f1)
+          # Renew token lease using the token itself.
+          docker exec -e VAULT_ADDR="$VAULT_ADDR" -e VAULT_CACERT="$VAULT_CACERT" -e VAULT_TOKEN="$APP_TOKEN" avitolog-vault             vault token renew -format=json > /tmp/renew.json
+          LEASE2=$(jq -r '.auth.lease_duration' /tmp/renew.json)
+          # Revoke and verify old token is unusable.
+          $V token revoke "$APP_TOKEN" >/dev/null
+          set +e
+          docker exec -e VAULT_ADDR="$VAULT_ADDR" -e VAULT_CACERT="$VAULT_CACERT" -e VAULT_TOKEN="$APP_TOKEN" avitolog-vault             vault kv get kv/avitolog/b2 >/tmp/revoked.out 2>&1
+          REVOKED_RC=$?
+          set -e
+          # New AppRole auth still works and reads rotated value.
+          SECRET_ID2=$($V write -field=secret_id -f auth/approle/role/avitolog/secret-id)
+          $V write -format=json auth/approle/login role_id="$ROLE_ID" secret_id="$SECRET_ID2" > /tmp/login2.json
+          APP_TOKEN2=$(jq -r '.auth.client_token' /tmp/login2.json)
+          docker exec -e VAULT_ADDR="$VAULT_ADDR" -e VAULT_CACERT="$VAULT_CACERT" -e VAULT_TOKEN="$APP_TOKEN2" avitolog-vault             vault kv get -format=json kv/avitolog/b2 > /tmp/read3.json
+          V3=$(jq -r '.data.data.credential' /tmp/read3.json)
+          V3H=$(printf '%s' "$V3" | sha256sum | cut -d' ' -f1)
+          VERSION=$(jq -r '.version' /tmp/status.json)
+          SEALED=$(jq -r '.sealed' /tmp/status.json)
+          STORAGE=$(jq -r '.storage_type' /tmp/status.json)
+          python3 - <<PY
+          import json
+          report={
+            "vault_version":"$VERSION",
+            "storage_type":"$STORAGE",
+            "tls":True,
+            "sealed": True if "$SEALED"=="true" else False,
+            "auth_method":"approle",
+            "policy":"avitolog-read",
+            "initial_lease_seconds":int("$LEASE1"),
+            "renewed_lease_seconds":int("$LEASE2"),
+            "renewable": True if "$RENEWABLE"=="true" else False,
+            "scoped_write_denied": int("$DENY_WRITE_RC")!=0,
+            "unrelated_read_denied": int("$DENY_OTHER_RC")!=0,
+            "rotation_hash_changed":"$V1H" != "$V2H",
+            "post_rotation_hash_stable":"$V2H" == "$V3H",
+            "revoked_token_denied": int("$REVOKED_RC")!=0,
+            "new_auth_after_revoke": True,
+            "root_token_exported": False,
+            "unseal_key_exported": False
+          }
+          report["pass"]=all([
+            report["tls"], report["sealed"] is False, report["storage_type"]=="raft",
+            report["renewable"], report["initial_lease_seconds"]>0, report["renewed_lease_seconds"]>0,
+            report["scoped_write_denied"], report["unrelated_read_denied"],
+            report["rotation_hash_changed"], report["post_rotation_hash_stable"],
+            report["revoked_token_denied"], report["new_auth_after_revoke"],
+            not report["root_token_exported"], not report["unseal_key_exported"]
+          ])
+          open("evidence/vault_report.json","w").write(json.dumps(report,indent=2)+"\n")
+          print(json.dumps(report,indent=2))
+          raise SystemExit(0 if report["pass"] else 2)
+          PY
+          rm -f /tmp/vault-init.json /tmp/login1.json /tmp/login2.json /tmp/read1.json /tmp/read2.json /tmp/read3.json /tmp/renew.json
+      - name: Upload redacted Vault evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m57b-vault-live-evidence
+          path: evidence/vault_report.json
+          retention-days: 30
+      - if: always()
+        name: Stop Vault
+        run: docker rm -f avitolog-vault || true
