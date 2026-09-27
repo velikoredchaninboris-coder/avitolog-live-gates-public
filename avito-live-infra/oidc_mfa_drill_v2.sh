@@ -131,16 +131,16 @@ TOKEN_URL="http://127.0.0.1:8080/realms/avitolog/protocol/openid-connect/token"
 JWKS_URI="$(jq -r .jwks_uri /tmp/discovery.json)"
 curl -fsS "$JWKS_URI" >/tmp/jwks.json
 
-cat >/tmp/totp.py <<'PY'
-import hmac,hashlib,struct,time,sys
-key=sys.argv[1].encode('utf-8')
-counter=int(time.time())//30
-msg=struct.pack('>Q',counter)
-h=hmac.new(key,msg,hashlib.sha1).digest()
-o=h[-1]&15
-n=(struct.unpack('>I',h[o:o+4])[0]&0x7fffffff)%1000000
-print(f"{n:06d}")
-PY
+cat >/tmp/TotpGen.java <<'JAVA'
+import org.keycloak.models.utils.TimeBasedOTP;
+public class TotpGen {
+  public static void main(String[] args) {
+    System.out.print(new TimeBasedOTP().generateTOTP(args[0]));
+  }
+}
+JAVA
+javac -cp "/tmp/keycloak/lib/lib/*" /tmp/TotpGen.java
+totp_now(){ java -cp "/tmp:/tmp/keycloak/lib/lib/*" TotpGen "$1"; }
 
 phase "password-only-negative:start"
 CODE_NO_OTP="$(curl -sS -o /tmp/no-otp.json -w '%{http_code}' -X POST "$TOKEN_URL"   -H 'Content-Type: application/x-www-form-urlencoded'   --data-urlencode 'client_id=avitolog-ci'   --data-urlencode 'grant_type=password'   --data-urlencode 'username=mfa-user'   --data-urlencode "password=$USER_PASS"   --data-urlencode 'scope=openid')"
@@ -150,7 +150,7 @@ test "$CODE_NO_OTP" = "400"
 test "$(jq -r '.error' /tmp/no-otp.json)" = "invalid_grant"
 phase "password-only-negative:ok"
 
-TOTP1="$(python3 /tmp/totp.py "$OTP_SECRET")"
+TOTP1="$(totp_now "$OTP_SECRET")"
 WRONG="$(python3 -c 'import sys; print(f"{(int(sys.argv[1])+1)%1000000:06d}")' "$TOTP1")"
 phase "wrong-totp-negative:start"
 CODE_WRONG="$(curl -sS -o /tmp/wrong.json -w '%{http_code}' -X POST "$TOKEN_URL"   -H 'Content-Type: application/x-www-form-urlencoded'   --data-urlencode 'client_id=avitolog-ci'   --data-urlencode 'grant_type=password'   --data-urlencode 'username=mfa-user'   --data-urlencode "password=$USER_PASS"   --data-urlencode "totp=$WRONG"   --data-urlencode 'scope=openid')"
@@ -194,7 +194,7 @@ phase "jwt-signature-1:ok"
 
 SLEEP_FOR="$(python3 -c 'import time; print(max(2,31-(int(time.time())%30)))')"
 sleep "$SLEEP_FOR"
-TOTP2="$(python3 /tmp/totp.py "$OTP_SECRET")"
+TOTP2="$(totp_now "$OTP_SECRET")"
 test "$TOTP2" != "$TOTP1"
 
 phase "correct-totp-login-2:start"
