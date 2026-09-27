@@ -21,6 +21,8 @@ jobs:
         run: mkdir -p avito-live-infra/out/meta && sha256sum avito-live-infra/*.sh > avito-live-infra/out/meta/input_sha256.txt
       - name: Run MinIO Object Lock drill
         run: chmod +x avito-live-infra/object_lock.sh && avito-live-infra/object_lock.sh
+      - name: Run MinIO Legal Hold drill
+        run: chmod +x avito-live-infra/legal_hold.sh && avito-live-infra/legal_hold.sh
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
