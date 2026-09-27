@@ -1,0 +1,118 @@
+name: AVITOLOG HA Live Gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/avitolog-ha-live.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-ha-failover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Start primary
+        run: |
+          docker network create avito-ha
+          docker run -d --name pg-primary --network avito-ha --network-alias pg-primary \
+            -e POSTGRES_USER=postgres \
+            -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_DB=avito_ha \
+            postgres@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f \
+            -c wal_level=replica \
+            -c max_wal_senders=10 \
+            -c max_replication_slots=10 \
+            -c hot_standby=on
+          for i in $(seq 1 60); do
+            docker exec pg-primary pg_isready -U postgres -d avito_ha && break
+            sleep 1
+          done
+          docker exec pg-primary psql -U postgres -d avito_ha -v ON_ERROR_STOP=1 -c "alter user postgres with replication;"
+          docker exec pg-primary psql -U postgres -d avito_ha -v ON_ERROR_STOP=1 -c "create table ha_probe(id bigint primary key, payload text not null); insert into ha_probe values (1,'before-failover');"
+
+      - name: Seed physical replica
+        run: |
+          docker run --rm --network avito-ha \
+            -e PGPASSWORD=postgres \
+            -v ha-replica-data:/var/lib/postgresql/data \
+            postgres@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f \
+            bash -lc "rm -rf /var/lib/postgresql/data/* && pg_basebackup -h pg-primary -U postgres -D /var/lib/postgresql/data -Fp -Xs -P -R"
+          docker run -d --name pg-replica --network avito-ha --network-alias pg-replica \
+            -e POSTGRES_PASSWORD=postgres \
+            -v ha-replica-data:/var/lib/postgresql/data \
+            postgres@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+          for i in $(seq 1 60); do
+            docker exec pg-replica pg_isready -U postgres -d avito_ha && break
+            sleep 1
+          done
+
+      - name: Verify streaming replication
+        run: |
+          ROLE=$(docker exec pg-replica psql -U postgres -d avito_ha -Atqc "select pg_is_in_recovery();")
+          [ "$ROLE" = "t" ]
+          VAL=$(docker exec pg-replica psql -U postgres -d avito_ha -Atqc "select payload from ha_probe where id=1;")
+          [ "$VAL" = "before-failover" ]
+          docker exec pg-primary psql -U postgres -d avito_ha -v ON_ERROR_STOP=1 -c "insert into ha_probe values (2,'replicated');"
+          for i in $(seq 1 30); do
+            CNT=$(docker exec pg-replica psql -U postgres -d avito_ha -Atqc "select count(*) from ha_probe where id=2;")
+            [ "$CNT" = "1" ] && exit 0
+            sleep 1
+          done
+          exit 1
+
+      - name: Fail primary and promote replica
+        run: |
+          T0=$(date +%s%3N)
+          docker stop pg-primary
+          docker exec pg-replica pg_ctl -D /var/lib/postgresql/data promote
+          for i in $(seq 1 30); do
+            RECOVERY=$(docker exec pg-replica psql -U postgres -d avito_ha -Atqc "select pg_is_in_recovery();" || true)
+            [ "$RECOVERY" = "f" ] && break
+            sleep 1
+          done
+          docker exec pg-replica psql -U postgres -d avito_ha -v ON_ERROR_STOP=1 -c "insert into ha_probe values (3,'after-failover');"
+          T1=$(date +%s%3N)
+          echo "FAILOVER_MS=$((T1-T0))" >> "$GITHUB_ENV"
+
+      - name: Integrity and negative checks
+        run: |
+          ROWS=$(docker exec pg-replica psql -U postgres -d avito_ha -Atqc "select count(*) from ha_probe;")
+          [ "$ROWS" = "3" ]
+          HASH=$(docker exec pg-replica psql -U postgres -d avito_ha -Atqc "select md5(string_agg(id||':'||payload,'|' order by id)) from ha_probe;")
+          [ -n "$HASH" ]
+          set +e
+          docker exec pg-primary psql -U postgres -d avito_ha -Atqc "select 1;" >/tmp/old-primary.out 2>&1
+          RC=$?
+          set -e
+          [ "$RC" -ne 0 ]
+          mkdir -p out
+          cat > out/ha_report.json <<JSON
+          {
+            "gate": "M57B_HA_LIVE",
+            "postgres_image_digest": "sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f",
+            "topology": "1 primary + 1 physical streaming replica",
+            "replication_verified": true,
+            "primary_failure_injected": true,
+            "replica_promoted": true,
+            "write_after_failover": true,
+            "old_primary_unavailable": true,
+            "rows_after_failover": $ROWS,
+            "integrity_md5": "$HASH",
+            "failover_ms": $FAILOVER_MS,
+            "production_ready": false,
+            "status": "PASS"
+          }
+JSON
+
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: m57b-ha-live
+          path: out/
+          retention-days: 7
