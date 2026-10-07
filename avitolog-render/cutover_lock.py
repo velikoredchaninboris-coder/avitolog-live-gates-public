@@ -20,33 +20,33 @@ def _request(path, headers=None, method='GET', data=None, timeout=5):
     except urllib.error.HTTPError as e:
         return e.code, e.read(1024)
 
-def _layout_inspect():
-    try:
-        ui=ROOT/'src'/'frontend'/'runtime'/'index.html'
-        if not ui.is_file():
-            print('LAYOUT_INSPECT ui_missing', flush=True)
-            return
-        compact=' '.join(ui.read_text(encoding='utf-8').split())
-        probes=[
-            ('r4_panel_css','.r4-panel{'),
-            ('r4_panel_actions','.r4-panel-actions{'),
-            ('r4_shell_css','.r4-shell{'),
-            ('r4_drawer_css','.r4-drawer{'),
-            ('r4_guide_css','.r4-guide{'),
-            ('r4_panel_ref','r4-panel'),
-            ('r4_field_css','.r4-field{'),
-            ('r4_width','width:390px'),
-        ]
-        low=compact.lower()
-        for label,needle in probes:
-            i=low.find(needle.lower())
-            if i<0:
-                print('LAYOUT_R4 '+label+' NOT_FOUND', flush=True)
-                continue
-            snippet=compact[max(0,i-1600):min(len(compact),i+2600)]
-            print('LAYOUT_R4 '+label+' '+snippet, flush=True)
-    except Exception as exc:
-        print('LAYOUT_INSPECT_FAIL '+type(exc).__name__, flush=True)
+def _apply_layout_patch():
+    ui=ROOT/'src'/'frontend'/'runtime'/'index.html'
+    if not ui.is_file():
+        raise RuntimeError('UI_LAYOUT_PATCH_SOURCE_MISSING')
+    text=ui.read_text(encoding='utf-8')
+    marker='AVITOLOG_R4_LAYOUT_PATCH_V1'
+    if marker in text:
+        return
+    style='''<style id="AVITOLOG_R4_LAYOUT_PATCH_V1">
+    /* Keep the conductor useful without covering the primary workflow. */
+    @media (min-width:1181px){
+      #escortR4{width:340px!important;right:14px!important}
+    }
+    @media (min-width:801px) and (max-width:1180px){
+      #escortR4{width:320px!important;right:12px!important}
+    }
+    @media (max-width:800px){
+      #escortR4{width:100%!important;left:0!important;right:0!important}
+    }
+    </style>'''
+    if '</head>' not in text:
+        raise RuntimeError('UI_LAYOUT_PATCH_HEAD_MISSING')
+    text=text.replace('</head>',style+'</head>',1)
+    ui.write_text(text,encoding='utf-8')
+    if marker not in ui.read_text(encoding='utf-8'):
+        raise RuntimeError('UI_LAYOUT_PATCH_VERIFY_FAIL')
+    print('AVITOLOG_UI_LAYOUT_PATCH_OK escort_width_desktop=340 tablet=320 mobile=100pct', flush=True)
 
 def _runtime_selftest(proc):
     deadline=time.time()+30
@@ -103,7 +103,7 @@ def _runtime_selftest(proc):
     print('AVITOLOG_RUNTIME_SELFTEST_OK readyz=200 basic=200 ui=200 owner_auth=accepted unauth_ui=401', flush=True)
 
 if not LOCK:
-    _layout_inspect()
+    _apply_layout_patch()
     backend = ROOT / 'src' / 'backend' / 'runtime'
     if not backend.is_dir():
         raise SystemExit('BACKEND_RUNTIME_MISSING')
