@@ -27,7 +27,7 @@ def _layout_inspect():
             print('LAYOUT_INSPECT ui_missing', flush=True)
             return
         compact=' '.join(ui.read_text(encoding='utf-8').split())
-        for needle in ('.lf-guide{','.lf-main{','.lf-shell{','.lf-layout{','.lf-hero{','.lf-actions{','position:fixed','grid-template-columns'):
+        for needle in ('.lf-guide{','.lf-grid{','class=\"lf-guide\"','class=\"lf-grid\"','.lf-shell{','.lf-preview{','.lf-main{'):
             i=compact.lower().find(needle)
             if i < 0:
                 continue
