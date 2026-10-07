@@ -50,9 +50,15 @@ def _runtime_selftest(proc):
     if not user or not password:
         raise RuntimeError('PILOT_BASIC_AUTH_MISSING')
     basic=base64.b64encode(f'{user}:{password}'.encode()).decode()
-    status,_=_request('/pilot/status',headers={'Authorization':'Basic '+basic},timeout=10)
+    basic_headers={'Authorization':'Basic '+basic}
+    status,_=_request('/pilot/status',headers=basic_headers,timeout=10)
     if status!=200:
         raise RuntimeError(f'BASIC_AUTH_SELFTEST_FAIL:{status}')
+    status,ui_body=_request('/ui/',headers=basic_headers,timeout=10)
+    if status!=200:
+        raise RuntimeError(f'UI_AUTH_SELFTEST_FAIL:{status}')
+    if b'<html' not in ui_body.lower() and b'<!doctype' not in ui_body.lower():
+        raise RuntimeError('UI_HTML_MARKER_MISSING')
 
     owner=os.environ.get('OWNER_API_TOKEN','')
     if not owner:
@@ -65,7 +71,7 @@ def _runtime_selftest(proc):
     if status!=404:
         raise RuntimeError(f'OWNER_BEARER_SELFTEST_FAIL:{status}')
 
-    print('AVITOLOG_RUNTIME_SELFTEST_OK readyz=200 basic=200 owner_auth=accepted unauth_ui=401', flush=True)
+    print('AVITOLOG_RUNTIME_SELFTEST_OK readyz=200 basic=200 ui=200 owner_auth=accepted unauth_ui=401', flush=True)
 
 if not LOCK:
     backend = ROOT / 'src' / 'backend' / 'runtime'
