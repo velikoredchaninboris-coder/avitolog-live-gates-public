@@ -13,18 +13,29 @@ if not LOCK:
     os.execvp('uvicorn', ['uvicorn', 'app.main:app', '--host', '0.0.0.0', '--port', os.environ.get('PORT', '10000')])
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path in {'/healthz', '/health'}:
-            body = b'{"status":"CUTOVER_LOCKED"}'
-            self.send_response(200)
-        else:
-            body = b'{"status":"CUTOVER_LOCKED","detail":"runtime_not_enabled"}'
-            self.send_response(503)
+    def _headers(self, status, length=0):
+        self.send_response(status)
         self.send_header('Content-Type','application/json')
         self.send_header('Cache-Control','no-store')
-        self.send_header('Content-Length',str(len(body)))
+        self.send_header('Content-Length',str(length))
         self.end_headers()
+
+    def do_HEAD(self):
+        # Render performs HEAD / for liveness. A 200 HEAD exposes no runtime content.
+        if self.path in {'/','/healthz','/health'}:
+            self._headers(200, 0)
+        else:
+            self._headers(503, 0)
+
+    def do_GET(self):
+        if self.path in {'/healthz','/health'}:
+            body = b'{"status":"CUTOVER_LOCKED"}'
+            self._headers(200, len(body))
+        else:
+            body = b'{"status":"CUTOVER_LOCKED","detail":"runtime_not_enabled"}'
+            self._headers(503, len(body))
         self.wfile.write(body)
+
     def log_message(self, fmt, *args):
         sys.stderr.write('cutover-lock ' + fmt % args + '\n')
 
