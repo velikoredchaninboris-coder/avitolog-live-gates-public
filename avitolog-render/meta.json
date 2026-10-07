@@ -1,0 +1,9 @@
+{
+  "source_sha256": "d629f4c0081f67f0abbb723258c51d582517ffe46a66464fa23d577bb1807e5f",
+  "ciphertext_sha256": "0cf1ccb6c2982810661a3df791d385099d93f0edb32a886ef860b08299a9f40c",
+  "source_size": 4530641,
+  "ciphertext_size": 6040952,
+  "part_count": 18,
+  "format": "fernet+base64-parts",
+  "source_branch": "avitolog-pilot-deploy"
+}
