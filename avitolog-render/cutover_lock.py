@@ -28,25 +28,23 @@ def _layout_inspect():
             return
         compact=' '.join(ui.read_text(encoding='utf-8').split())
         probes=[
-            ('guide_ru',''.join(chr(x) for x in (1055,1056,1054,1042,1054,1044,1053,1048,1050))),
-            ('show_listing',''.join(chr(x) for x in (1055,1086,1082,1072,1078,1080,1090,1077,32,1086,1073,1098,1103,1074,1083,1077,1085,1080,1077))),
-            ('next_now',''.join(chr(x) for x in (1042,1086,1090,32,1095,1090,1086,32,1074,1072,1078,1085,1086,32,1080,1084,1077,1085,1085,1086,32,1089,1077,1081,1095,1072,1089))),
+            ('r4_panel_css','.r4-panel{'),
+            ('r4_panel_actions','.r4-panel-actions{'),
+            ('r4_shell_css','.r4-shell{'),
+            ('r4_drawer_css','.r4-drawer{'),
+            ('r4_guide_css','.r4-guide{'),
+            ('r4_panel_ref','r4-panel'),
+            ('r4_field_css','.r4-field{'),
+            ('r4_width','width:390px'),
         ]
+        low=compact.lower()
         for label,needle in probes:
-            pos=0
-            count=0
-            low=compact.lower()
-            target=needle.lower()
-            while count<3:
-                i=low.find(target,pos)
-                if i<0:
-                    break
-                snippet=compact[max(0,i-1200):min(len(compact),i+2200)]
-                print('LAYOUT_EXACT '+label+' '+str(count)+' '+snippet, flush=True)
-                pos=i+len(target)
-                count+=1
-            if count==0:
-                print('LAYOUT_EXACT '+label+' NOT_FOUND', flush=True)
+            i=low.find(needle.lower())
+            if i<0:
+                print('LAYOUT_R4 '+label+' NOT_FOUND', flush=True)
+                continue
+            snippet=compact[max(0,i-1600):min(len(compact),i+2600)]
+            print('LAYOUT_R4 '+label+' '+snippet, flush=True)
     except Exception as exc:
         print('LAYOUT_INSPECT_FAIL '+type(exc).__name__, flush=True)
 
