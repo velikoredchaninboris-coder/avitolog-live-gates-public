@@ -27,12 +27,26 @@ def _layout_inspect():
             print('LAYOUT_INSPECT ui_missing', flush=True)
             return
         compact=' '.join(ui.read_text(encoding='utf-8').split())
-        for needle in ('.lf-guide{','.lf-grid{','class=\"lf-guide\"','class=\"lf-grid\"','.lf-shell{','.lf-preview{','.lf-main{'):
-            i=compact.lower().find(needle)
-            if i < 0:
-                continue
-            snippet=compact[max(0,i-600):min(len(compact),i+1200)]
-            print('LAYOUT_INSPECT '+needle+' '+snippet, flush=True)
+        probes=[
+            ('guide_ru',''.join(chr(x) for x in (1055,1056,1054,1042,1054,1044,1053,1048,1050))),
+            ('show_listing',''.join(chr(x) for x in (1055,1086,1082,1072,1078,1080,1090,1077,32,1086,1073,1098,1103,1074,1083,1077,1085,1080,1077))),
+            ('next_now',''.join(chr(x) for x in (1042,1086,1090,32,1095,1090,1086,32,1074,1072,1078,1085,1086,32,1080,1084,1077,1085,1085,1086,32,1089,1077,1081,1095,1072,1089))),
+        ]
+        for label,needle in probes:
+            pos=0
+            count=0
+            low=compact.lower()
+            target=needle.lower()
+            while count<3:
+                i=low.find(target,pos)
+                if i<0:
+                    break
+                snippet=compact[max(0,i-1200):min(len(compact),i+2200)]
+                print('LAYOUT_EXACT '+label+' '+str(count)+' '+snippet, flush=True)
+                pos=i+len(target)
+                count+=1
+            if count==0:
+                print('LAYOUT_EXACT '+label+' NOT_FOUND', flush=True)
     except Exception as exc:
         print('LAYOUT_INSPECT_FAIL '+type(exc).__name__, flush=True)
 
