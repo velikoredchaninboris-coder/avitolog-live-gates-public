@@ -20,6 +20,22 @@ def _request(path, headers=None, method='GET', data=None, timeout=5):
     except urllib.error.HTTPError as e:
         return e.code, e.read(1024)
 
+def _layout_inspect():
+    try:
+        ui=ROOT/'src'/'frontend'/'runtime'/'index.html'
+        if not ui.is_file():
+            print('LAYOUT_INSPECT ui_missing', flush=True)
+            return
+        compact=' '.join(ui.read_text(encoding='utf-8').split())
+        for needle in ('now-flow','guide','sidebar','drawer','panel'):
+            i=compact.lower().find(needle)
+            if i < 0:
+                continue
+            snippet=compact[max(0,i-600):min(len(compact),i+1200)]
+            print('LAYOUT_INSPECT '+needle+' '+snippet, flush=True)
+    except Exception as exc:
+        print('LAYOUT_INSPECT_FAIL '+type(exc).__name__, flush=True)
+
 def _runtime_selftest(proc):
     deadline=time.time()+30
     last=None
@@ -75,6 +91,7 @@ def _runtime_selftest(proc):
     print('AVITOLOG_RUNTIME_SELFTEST_OK readyz=200 basic=200 ui=200 owner_auth=accepted unauth_ui=401', flush=True)
 
 if not LOCK:
+    _layout_inspect()
     backend = ROOT / 'src' / 'backend' / 'runtime'
     if not backend.is_dir():
         raise SystemExit('BACKEND_RUNTIME_MISSING')
