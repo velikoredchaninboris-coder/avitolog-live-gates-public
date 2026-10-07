@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 LOCK = os.environ.get('CUTOVER_LOCK', '1') != '0'
 ROOT = Path(__file__).resolve().parent
 PORT = os.environ.get('PORT', '10000')
+# live UI layout patch channel verified
 
 def _request(path, headers=None, method='GET', data=None, timeout=5):
     req=urllib.request.Request(
